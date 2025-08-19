@@ -1,0 +1,1390 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>区块链博客 - Vue + Web3.js</title>
+  <link rel="preconnect" href="https://cdn.jsdelivr.net"/>
+  <link rel="preconnect" href="https://cdnjs.cloudflare.com"/>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --panel: #161b22;
+      --text: #e6edf3;
+      --muted: #a1a1aa;
+      --primary: #3b82f6;
+      --success: #22c55e;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --border: #2d333b;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, 'Apple Color Emoji', 'Segoe UI Emoji';
+      background: var(--bg); color: var(--text);
+    }
+    .container { max-width: 1100px; margin: 0 auto; padding: 24px; }
+    header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+    .brand { font-weight: 700; font-size: 20px; }
+    .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+    .row { display: grid; grid-template-columns: 1fr; gap: 16px; }
+    @media (min-width: 960px) { .row { grid-template-columns: 1.2fr 1fr; } }
+    button {
+      background: var(--primary); border: none; color: white; padding: 10px 14px; border-radius: 8px; cursor: pointer; font-weight: 600;
+    }
+    button.secondary { background: #334155; }
+    button.success { background: var(--success); }
+    button.warning { background: var(--warning); }
+    button.danger { background: var(--danger); }
+    button:disabled { opacity: .6; cursor: not-allowed; }
+    input, textarea { width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border); background: #0b1220; color: var(--text); }
+    input[readonly] { opacity: .85; }
+    label { font-size: 12px; color: var(--muted); display: inline-block; margin-bottom: 6px; }
+    .muted { color: var(--muted); }
+    .flex { display: flex; gap: 8px; align-items: center; }
+    .between { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .list { display: grid; gap: 12px; }
+    .post { border: 1px solid var(--border); border-radius: 12px; padding: 12px; background: #0f1623; }
+    .post h3 { margin: 0 0 6px; font-size: 18px; }
+        .tag { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
+    .divider { height: 1px; background: var(--border); margin: 12px 0; }
+    .nfts { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+    .card { background: #0f1623; border: 1px solid var(--border); border-radius: 12px; padding: 12px; }
+    a { color: #93c5fd; text-decoration: none; }
+    .small { font-size: 12px; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; }
+    .mb8 { margin-bottom: 8px; }
+    .mb12 { margin-bottom: 12px; }
+    .mb16 { margin-bottom: 16px; }
+    .cover { width: 100%; max-height: 260px; object-fit: cover; border-radius: 10px; border: 1px solid var(--border); display: block; }
+    .avatar { width: 80px; height: 80px; border-radius: 50%; object-fit: cover; border: 1px solid var(--border); }
+    .nft-img { width: 100%; height: 180px; object-fit: cover; border-radius: 8px; border: 1px solid var(--border); display: block; }
+    .prize-img { width: 56px; height: 56px; border-radius: 8px; object-fit: cover; border: 1px solid var(--border); }
+    .prize-row { display: flex; align-items: center; gap: 10px; }
+
+    /* Hover copy tooltip */
+    .hover-copy { position: relative; display: inline-flex; align-items: center; gap: 6px; }
+    /* bridge area to avoid flicker when moving cursor from trigger to tooltip */
+    .hover-copy::after { content: ""; position: absolute; left: 0; top: 100%; width: 100%; height: 12px; }
+    .hover-copy .tooltip {
+      display: none; position: absolute; top: 100%; left: 0; transform: translateY(6px); z-index: 1000;
+      background: #0b1220; color: var(--text); border: 1px solid var(--border);
+      padding: 8px 10px; border-radius: 8px; min-width: 240px; max-width: 360px;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.35);
+      user-select: text;
+    }
+    /* keep visible when either trigger or tooltip is hovered */
+    .hover-copy:hover .tooltip, .hover-copy .tooltip:hover { display: block; }
+    .small-btn {
+      background: #334155; color: #fff; border: none; padding: 4px 8px; border-radius: 6px; cursor: pointer; font-size: 12px;
+    }
+  /* Modal */
+    .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 2000; }
+        .modal { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; width: min(720px, 92vw); max-height: 80vh; overflow: auto; }
+  </style>
+</head>
+<body>
+  <div id="app" class="container">
+
+  <!-- Draw Records Modal -->
+  <div v-if="showDrawModal" class="modal-overlay" @click.self="closeDrawRecords">
+    <div class="modal">
+      <div class="between mb12">
+        <h3>中奖记录</h3>
+        <div class="flex">
+          <button class="secondary" @click="initDrawRecords" :disabled="loadingMoreDraw">刷新</button>
+          <button class="secondary" @click="closeDrawRecords">关闭</button>
+        </div>
+      </div>
+      <div class="small muted">仅显示最近检索结果（可多次打开刷新）</div>
+      <div v-if="loadingMoreDraw" class="muted">加载中...</div>
+      <div v-else>
+      <div v-if="drawRecords.length===0" class="muted">暂无中奖记录</div>
+      <div v-for="(r,idx) in drawRecords" :key="idx" class="card">
+      <div>用户：<span class="mono">{{ short(r.user) }}</span></div>
+      <div>奖品名称：{{ r.prizeName }}</div>
+      <div>NFT ID：<span class="mono">#{{ r.tokenId }}</span><span v-if="r.uri" class="small"> · <a :href="resolveUrl(r.uri)" target="_blank">查看</a></span></div>
+      <div v-if="r._imageUrl" class="mb8">
+      <img :src="displayImageUrl(r._imageUrl)" alt="NFT" class="nft-img" v-if="!r._imgErr" @error="onRecordImgError(r)" referrerpolicy="no-referrer" loading="lazy" />
+      </div>
+      <div>时间：{{ formatTime(r.timestamp) }}</div>
+      <div class="muted small" v-if="r.tx">
+      <a v-if="explorerTx(r.tx)" :href="explorerTx(r.tx)" target="_blank">查看交易</a>
+      <span v-else class="mono">{{ r.tx.slice(0,10) }}...</span>
+      </div>
+      </div>
+      </div>
+      <div class="between" style="margin-top:8px;">
+        <button class="secondary" @click="loadMoreDrawRecords" :disabled="loadingMoreDraw || !hasMoreDraw">{{ loadingMoreDraw ? '加载中...' : (hasMoreDraw ? '加载更多' : '没有更多了') }}</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Rank Modal -->
+  <div v-if="showRankModal" class="modal-overlay" @click.self="closeRank">
+    <div class="modal">
+      <div class="between mb12">
+        <h3>作者排行榜</h3>
+        <div class="flex">
+          <button class="secondary" @click="initRank" :disabled="loadingRank">刷新</button>
+          <button class="secondary" @click="closeRank">关闭</button>
+        </div>
+      </div>
+      <div class="small muted">按发文数量降序</div>
+      <div v-if="loadingRank" class="muted">加载中...</div>
+      <div v-else>
+        <div v-if="rankList.length===0" class="muted">暂无数据</div>
+        <div v-for="(r,idx) in rankList" :key="r.address" class="card">
+          <div class="between">
+            <div>
+              <div class="small muted">第 {{ (currentRankPage-1)*rankPageSize + idx + 1 }} 名</div>
+              <div class="hover-copy">
+                <span class="mono">{{ short(r.address) }}</span>
+                <span class="tooltip">
+                  <div class="mono mb8" style="word-break: break-all;">{{ r.address }}</div>
+                  <button class="small-btn" @click="copy(r.address)">复制</button>
+                </span>
+              </div>
+            </div>
+            <div class="small">发文数量：{{ r.count }}</div>
+          </div>
+        </div>
+      </div>
+      <div class="between" style="margin-top:8px;">
+        <div class="small muted">第 {{ currentRankPage }} / {{ rankTotalPages }} 页（共 {{ rankTotal }} 位作者）</div>
+        <div class="flex" style="gap:6px;">
+          <button class="secondary" @click="prevRank" :disabled="!hasPrevRank">上一页</button>
+          <button class="secondary" @click="nextRank" :disabled="!hasNextRank">下一页</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Edit Post Modal -->
+  <div v-if="showEditModal" class="modal-overlay" @click.self="closeEdit">
+    <div class="modal">
+      <div class="between mb12">
+        <h3>编辑文章</h3>
+        <div class="flex">
+          <button class="secondary" @click="closeEdit">关闭</button>
+        </div>
+      </div>
+      <div class="list">
+        <div>
+          <label>标题</label>
+          <input v-model.trim="editingPost.title" placeholder="标题" />
+        </div>
+        <div>
+          <label>封面图 URL</label>
+          <input v-model.trim="editingPost.url" placeholder="https://..." />
+        </div>
+        <div>
+          <label>内容（已自动解码，保存时自动 base64+gzip 上链）</label>
+          <textarea v-model.trim="editingPost.content" rows="4" placeholder="内容"></textarea>
+        </div>
+        <div class="between">
+          <div class="small muted">仅作者可编辑，操作将消耗 Gas</div>
+          <div class="flex">
+            <button class="success" @click="submitEdit" :disabled="!account || editSubmitting">{{ editSubmitting ? '保存中...' : '保存' }}</button>
+            <button class="secondary" @click="closeEdit">取消</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Create Post Modal -->
+  <div v-if="showCreateModal" class="modal-overlay" @click.self="closeCreate">
+    <div class="modal">
+      <div class="between mb12">
+        <h3>发布文章</h3>
+        <div class="flex">
+          <button class="secondary" @click="closeCreate">关闭</button>
+        </div>
+      </div>
+      <div class="list">
+        <div>
+          <label>标题</label>
+          <input v-model.trim="newPost.title" placeholder="标题" />
+        </div>
+        <div>
+          <label>封面图 URL</label>
+          <input v-model.trim="newPost.url" placeholder="https://..." />
+        </div>
+        <div>
+          <label>内容（保存时自动 base64+gzip 上链；尽量简短）</label>
+          <textarea v-model.trim="newPost.content" rows="4" placeholder="内容"></textarea>
+        </div>
+        <div class="between">
+          <div class="small muted">发布会消耗 Gas</div>
+          <div class="flex">
+            <button class="success" @click="createPost" :disabled="!account || posting">{{ posting ? '发布中...' : '发布' }}</button>
+            <button class="secondary" @click="closeCreate">取消</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+    <header>
+      <div class="brand">区块链博客 DApp</div>
+      <div class="flex">
+        <div v-if="account" class="small">
+          <span class="hover-copy">
+            <span class="mono">{{ short(account) }}</span>
+            <span class="tooltip">
+              <div class="mono mb8" style="word-break: break-all;">{{ account }}</div>
+              <button class="small-btn" @click="copy(account)">复制</button>
+            </span>
+          </span>
+        </div>
+        <button v-if="!account" @click="connect" :disabled="connecting">{{ connecting ? '连接中...' : '连接钱包' }}</button>
+        <button v-else class="secondary" @click="refreshMine">刷新资料</button>
+      </div>
+    </header>
+
+    <div class="row">
+      <!-- 左侧：文章与互动 -->
+      <div class="panel">
+        <div class="between mb12">
+          <div>
+            <div class="small muted">网络/ChainId</div>
+            <div class="mono small">{{ networkDesc }}</div>
+          </div>
+          <div class="flex">
+            <span class="tag">
+              合约:
+              <span class="hover-copy">
+                <span class="mono">{{ short(blogAddress) }}</span>
+                <span class="tooltip">
+                  <div class="mono mb8" style="word-break: break-all;">{{ blogAddress }}</div>
+                  <button class="small-btn" @click="copy(blogAddress)">复制</button>
+                </span>
+              </span>
+            </span>
+            <button class="secondary" @click="loadAll">刷新数据</button>
+          </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="between mb8">
+          <div class="flex"> 
+            <h3>最新文章</h3>
+            <button class="success" @click="openCreate" :disabled="!account" :title="!account ? '请先连接钱包' : '发布文章'">发布</button>
+            <button class="secondary" @click="openRank">排行榜</button>
+          </div>
+          <div class="flex">
+            <div class="small muted">总数: {{ totalPosts }}</div>
+            <div class="flex" style="gap:6px;margin-left:10px;">
+              <button class="secondary" :class="postFilter==='all' ? 'success' : 'secondary'" @click="setPostFilter('all')">全部</button>
+              <button class="secondary" :class="postFilter==='mine' ? 'success' : 'secondary'" @click="setPostFilter('mine')" :disabled="!account" :title="!account ? '请先连接钱包' : '仅显示我的文章'">我的文章</button>
+            </div>
+          </div>
+        </div>
+        <div class="list">
+          <div v-for="p in posts" :key="p.id" class="post">
+            <div class="between mb8">
+              <h3>{{ p.title }}</h3>
+              <div class="flex">
+                <span class="tag">#{{ p.id }}</span>
+                <button class="secondary" v-if="account && p.author && account.toLowerCase()===p.author.toLowerCase()" @click="openEdit(p)">编辑</button>
+              </div>
+            </div>
+            <div class="small muted mb8">
+              作者:
+              <span class="hover-copy">
+                <span class="mono">{{ short(p.author) }}</span>
+                <span class="tooltip">
+                  <div class="mono mb8" style="word-break: break-all;">{{ p.author }}</div>
+                  <button class="small-btn" @click="copy(p.author)">复制</button>
+                </span>
+              </span>
+              · 评论: {{ p.commentCount }} · 互动人数: {{ p.commenterCount }}
+              · {{ formatTime(p.timestamp) }}
+            </div>
+            <div v-if="p.url" class="mb8">
+              <a :href="p.url" target="_blank">
+                <img :src="displayImageUrl(p.url)" alt="封面图" class="cover" v-if="!p._imgErr" @error="onPostImgError(p)" referrerpolicy="no-referrer"/>
+              </a>
+              <div v-if="p._imgErr" class="small muted">无法加载图片，<a :href="p.url" target="_blank">打开链接</a></div>
+            </div>
+            <div class="mb12">{{ p.decodedContent ?? p.content }}</div>
+
+            <div class="small muted mb8">发表评论</div>
+            <div class="flex mb8">
+              <input v-model.trim="p._comment" placeholder="评论内容"/>
+              <button @click="comment(p)" :disabled="!account || p._commenting">{{ p._commenting ? '发送中...' : '发送' }}</button>
+              <button class="secondary" @click="toggleComments(p)">{{ p._showComments? '收起评论' : '查看评论' }}</button>
+            </div>
+            <div v-if="p._showComments" class="list small">
+              <div class="muted">仅通过事件读取，可能需要一点时间加载</div>
+              <div v-if="p._loadingComments" class="muted">加载中...</div>
+              <div v-else>
+                <div v-if="!p._comments || p._comments.length===0" class="muted">暂无评论</div>
+                <div v-for="(c,idx) in p._comments" :key="idx" class="card">
+                  <div class="small">
+                    <span class="hover-copy">
+                      <span class="mono">{{ short(c.commenter) }}</span>
+                      <span class="tooltip">
+                        <div class="mono mb8" style="word-break: break-all;">{{ c.commenter }}</div>
+                        <button class="small-btn" @click="copy(c.commenter)">复制</button>
+                      </span>
+                    </span>
+                    · {{ formatTime(c.timestamp) }}
+                  </div>
+                  <div>{{ c.content }}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="between" style="margin-top:12px;">
+          <div class="small muted">第 {{ currentPage }} / {{ totalPages }} 页</div>
+          <div class="flex" style="gap:6px;">
+            <button class="secondary" @click="prevPage" :disabled="!hasPrev">上一页</button>
+            <button class="secondary" @click="nextPage" :disabled="!hasNext">下一页</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 右侧：个人、抽奖、NFT -->
+      <div class="panel">
+        <div class="between mb12">
+          <h3>我的资料</h3>
+          <div class="small muted">积分: {{ points }}</div>
+        </div>
+        <!-- 查看模式 -->
+        <div v-if="!editingProfile" class="list mb16">
+          <div class="flex" style="align-items:center; gap:12px;">
+            <img v-if="profile.avatar && !viewAvatarErr" :src="displayImageUrl(profile.avatar)" alt="头像" class="avatar" @error="viewAvatarErr = true" referrerpolicy="no-referrer"/>
+            <div v-else class="avatar" style="display:flex;align-items:center;justify-content:center;background:#111827;color:#9ca3af;">无</div>
+            <div>
+              <div><strong>{{ profile.nickname || '未设置昵称' }}</strong></div>
+              <div class="small muted">{{ profile.bio || '未设置简介' }}</div>
+            </div>
+          </div>
+          <div class="between">
+            <div class="small muted" v-if="account">地址:
+              <span class="hover-copy">
+                <span class="mono">{{ short(account) }}</span>
+                <span class="tooltip">
+                  <div class="mono mb8" style="word-break: break-all;">{{ account }}</div>
+                  <button class="small-btn" @click="copy(account)">复制</button>
+                </span>
+              </span>
+            </div>
+            <button class="secondary" @click="startEditProfile" :disabled="!account">编辑</button>
+          </div>
+        </div>
+        <!-- 编辑模式 -->
+        <div v-else class="list mb16">
+          <div>
+            <label>昵称</label>
+            <input v-model.trim="editProfile.nickname" placeholder="昵称"/>
+          </div>
+          <div>
+            <label>头像 URL</label>
+            <input v-model.trim="editProfile.avatar" placeholder="https://..."/>
+            <div v-if="editProfile.avatar" class="mb8">
+              <img :src="displayImageUrl(editProfile.avatar)" alt="头像预览" class="avatar" v-if="!editAvatarErr" @error="editAvatarErr = true" referrerpolicy="no-referrer"/>
+              <div v-else class="small muted">头像加载失败</div>
+            </div>
+          </div>
+          <div>
+            <label>简介</label>
+            <input v-model.trim="editProfile.bio" placeholder="一句话介绍"/>
+          </div>
+          <div class="flex">
+            <button class="success" @click="saveProfile" :disabled="!account || savingProfile">{{ savingProfile ? '保存中...' : '保存' }}</button>
+            <button class="secondary" @click="cancelEditProfile">取消</button>
+          </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="between mb8">
+          <h3>抽奖</h3>
+          <div class="small muted">每次消耗 {{ drawCost }} 积分</div>
+        </div>
+        <div class="list mb16">
+          <div class="flex">
+            <button class="warning" @click="draw" :disabled="!account || points < drawCost || loadingDraw" :title="!account ? '请先连接钱包' : (points < drawCost ? '积分不足' : '抽奖')">{{ loadingDraw ? '抽奖中...' : '抽一次' }}</button>
+            <button class="secondary" @click="openDrawRecords">查看中奖记录</button>
+          </div>
+          <div class="small muted" v-if="account && points < drawCost">积分不足，需至少 {{ drawCost }} 分</div>
+
+          
+          <div class="small muted">奖品列表：</div>
+          <div class="list">
+            <div v-for="(prize,idx) in prizes" :key="idx" class="prize-row">
+              <img v-if="!prize._imgErr && (prize.imageUrl || prize.uri)" :src="displayImageUrl(prize.imageUrl || prize.uri)" class="prize-img" alt="prize" @error="prize._imgErr = true" referrerpolicy="no-referrer" />
+              <div class="small" style="flex:1;">
+                <div>{{ prize.name }}</div>
+                <div class="muted">权重: {{ prize.weight }}</div>
+              </div>
+            </div>
+            <div v-if="prizes.length===0" class="small muted">暂无奖品</div>
+          </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <h3 class="mb8">我的 NFT</h3>
+        <div class="nfts">
+          <div v-for="n in nfts" :key="n.tokenId" class="card">
+            <div v-if="n.imageUrl" class="mb8"><img :src="displayImageUrl(n.imageUrl)" class="nft-img" alt="NFT" referrerpolicy="no-referrer" /></div>
+            <div class="small">#{{ n.tokenId }}</div>
+            <div v-if="n.metadata" class="small">
+              <div class="muted">名称: {{ n.metadata.name }}</div>
+              <div class="muted">描述: {{ n.metadata.description }}</div>
+            </div>
+          </div>
+          <div v-if="nfts.length===0" class="small muted">暂无持有</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Libs -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/web3/1.10.4/web3.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/vue@3.4.38/dist/vue.global.prod.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
+
+  <script>
+    // 配置：合约地址与 ABI（从合约源码构建的最小 ABI，涵盖本页使用到的函数/事件）
+    const BLOG_ADDRESS = '0x8039fec0287b01a685c851fb0Bac0Ac81694a483';
+    const BLOG_ABI = [
+            // Events
+      { "anonymous": false, "inputs": [
+          {"indexed": true, "internalType": "uint256", "name": "postId", "type": "uint256"},
+          {"indexed": true, "internalType": "address", "name": "author", "type": "address"},
+          {"indexed": false, "internalType": "string", "name": "title", "type": "string"}
+        ], "name": "PostCreated", "type": "event" },
+      { "anonymous": false, "inputs": [
+          {"indexed": true, "internalType": "address", "name": "commenter", "type": "address"},
+          {"indexed": true, "internalType": "uint256", "name": "postId", "type": "uint256"},
+          {"indexed": false, "internalType": "string", "name": "content", "type": "string"},
+          {"indexed": false, "internalType": "uint256", "name": "timestamp", "type": "uint256"}
+        ], "name": "Comment", "type": "event" },
+      { "anonymous": false, "inputs": [
+          {"indexed": true, "internalType": "address", "name": "user", "type": "address"},
+          {"indexed": false, "internalType": "uint256", "name": "tokenId", "type": "uint256"},
+          {"indexed": false, "internalType": "string", "name": "prizeName", "type": "string"},
+          {"indexed": false, "internalType": "string", "name": "uri", "type": "string"},
+          {"indexed": false, "internalType": "uint256", "name": "timestamp", "type": "uint256"}
+        ], "name": "NFTDrawn", "type": "event" },
+      { "anonymous": false, "inputs": [
+          {"indexed": true, "internalType": "uint256", "name": "postId", "type": "uint256"},
+          {"indexed": true, "internalType": "address", "name": "editor", "type": "address"}
+        ], "name": "PostEdited", "type": "event" },
+      { "anonymous": false, "inputs": [
+          {"indexed": true, "internalType": "address", "name": "user", "type": "address"},
+          {"indexed": false, "internalType": "string", "name": "nickname", "type": "string"}
+        ], "name": "ProfileUpdated", "type": "event" },
+      
+      // Writes
+      { "inputs": [
+          {"internalType":"string","name":"title","type":"string"},
+          {"internalType":"string","name":"content","type":"string"},
+          {"internalType":"string","name":"url","type":"string"}
+        ], "name": "createPost", "outputs": [], "stateMutability": "nonpayable", "type": "function" },
+      { "inputs": [
+          {"internalType":"uint256","name":"postId","type":"uint256"},
+          {"internalType":"string","name":"content","type":"string"}
+        ], "name": "comment", "outputs": [], "stateMutability": "nonpayable", "type": "function" },
+      { "inputs": [
+          {"internalType":"string","name":"nickname","type":"string"},
+          {"internalType":"string","name":"avatar","type":"string"},
+          {"internalType":"string","name":"bio","type":"string"}
+        ], "name": "setProfile", "outputs": [], "stateMutability": "nonpayable", "type": "function" },
+      { "inputs": [], "name": "draw", "outputs": [], "stateMutability": "nonpayable", "type": "function" },
+
+      // Views
+      { "inputs": [], "name": "getTotalPosts", "outputs": [{"internalType":"uint256","name":"","type":"uint256"}], "stateMutability":"view", "type":"function" },
+      { "inputs": [
+          {"internalType":"uint256","name":"offset","type":"uint256"},
+          {"internalType":"uint256","name":"limit","type":"uint256"}
+        ], "name": "getPosts", "outputs": [
+          {"components":[
+            {"internalType":"uint256","name":"id","type":"uint256"},
+            {"internalType":"string","name":"title","type":"string"},
+            {"internalType":"string","name":"content","type":"string"},
+            {"internalType":"string","name":"url","type":"string"},
+            {"internalType":"address","name":"author","type":"address"},
+            {"internalType":"uint256","name":"commentCount","type":"uint256"},
+            {"internalType":"uint256","name":"commenterCount","type":"uint256"},
+            {"internalType":"uint256","name":"timestamp","type":"uint256"}
+          ], "internalType":"struct BlogPlatform.Post[]", "name":"result", "type":"tuple[]"}
+        ], "stateMutability":"view", "type":"function" },
+      { "inputs": [
+          {"internalType":"address","name":"user","type":"address"},
+          {"internalType":"uint256","name":"offset","type":"uint256"},
+          {"internalType":"uint256","name":"limit","type":"uint256"}
+        ], "name": "getUserPosts", "outputs": [
+          {"components":[
+            {"internalType":"uint256","name":"id","type":"uint256"},
+            {"internalType":"string","name":"title","type":"string"},
+            {"internalType":"string","name":"content","type":"string"},
+            {"internalType":"string","name":"url","type":"string"},
+            {"internalType":"address","name":"author","type":"address"},
+            {"internalType":"uint256","name":"commentCount","type":"uint256"},
+            {"internalType":"uint256","name":"commenterCount","type":"uint256"},
+            {"internalType":"uint256","name":"timestamp","type":"uint256"}
+          ], "internalType":"struct BlogPlatform.Post[]", "name":"result", "type":"tuple[]"}
+        ], "stateMutability":"view", "type":"function" },
+      { "inputs": [ {"internalType":"address","name":"user","type":"address"} ], "name": "getUserPostCount", "outputs": [ {"internalType":"uint256","name":"","type":"uint256"} ], "stateMutability":"view", "type":"function" },
+      { "inputs": [ {"internalType":"address","name":"user","type":"address"} ],
+        "name": "getUserProfile", "outputs": [
+          {"components":[
+            {"internalType":"string","name":"nickname","type":"string"},
+            {"internalType":"string","name":"avatar","type":"string"},
+            {"internalType":"string","name":"bio","type":"string"}
+          ], "internalType":"struct BlogPlatform.Profile", "name":"", "type":"tuple"},
+          {"internalType":"uint256","name":"point","type":"uint256"}
+        ], "stateMutability":"view", "type":"function" },
+      { "inputs": [ {"internalType":"address","name":"owner","type":"address"} ],
+        "name": "getOwnedTokens", "outputs": [ {"internalType":"uint256[]","name":"","type":"uint256[]"} ], "stateMutability":"view", "type":"function" },
+      { "inputs": [ {"internalType":"uint256","name":"tokenId","type":"uint256"} ], "name": "tokenURI",
+        "outputs": [ {"internalType":"string","name":"","type":"string"} ], "stateMutability":"view", "type":"function" },
+      { "inputs": [], "name": "getPrizeList", "outputs": [
+        {"components":[
+          {"internalType":"string","name":"name","type":"string"},
+          {"internalType":"string","name":"uri","type":"string"},
+          {"internalType":"uint256","name":"weight","type":"uint256"}
+        ], "internalType":"struct BlogPlatform.Prize[]", "name":"", "type":"tuple[]"}
+      ], "stateMutability":"view", "type":"function" },
+      { "inputs": [], "name": "getAuthorsTotal", "outputs": [{"internalType":"uint256","name":"","type":"uint256"}], "stateMutability":"view", "type":"function" },
+      { "inputs": [ {"internalType":"uint256","name":"offset","type":"uint256"}, {"internalType":"uint256","name":"limit","type":"uint256"} ],
+        "name":"getAuthorsRank", "outputs": [
+          {"internalType":"address[]","name":"addrs","type":"address[]"},
+          {"internalType":"uint256[]","name":"counts","type":"uint256[]"}
+        ], "stateMutability":"view", "type":"function" },
+    ];
+
+    const { createApp, ref, reactive, onMounted } = Vue;
+
+    // Configurable event query constants
+    const LOG_MAX_RANGE = 90000;       // Max block range per getPastLogs query
+    const EVENT_SEARCH_DEPTH = 300000; // How many recent blocks to search for events
+    const POST_PAGE_SIZE = 10;         // Posts per page
+
+    function tryDecodeContent(raw) {
+      if (!raw) return raw;
+      try {
+        // heuristic: base64 gzip
+        // decode base64 to Uint8Array -> gunzip -> to string
+        const bin = atob(raw);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        const inflated = window.pako.ungzip(bytes);
+        return new TextDecoder('utf-8').decode(inflated);
+      } catch (e) {
+        // fallback to raw
+        return raw;
+      }
+    }
+
+    // Encode plain text to base64+gzip for on-chain storage
+    function encodeToBase64Gzip(str) {
+      try {
+        const bytes = new TextEncoder().encode(str);
+        const gz = window.pako.gzip(bytes);
+        let bin = '';
+        for (let i = 0; i < gz.length; i++) bin += String.fromCharCode(gz[i]);
+        return btoa(bin);
+      } catch (e) {
+        console.warn('encodeToBase64Gzip failed', e);
+        return str; // fallback to raw if encoding fails
+      }
+    }
+
+    function parseTokenMetadata(uri) {
+      if (!uri) return null;
+      if (uri.startsWith('data:application/json;base64,')) {
+        try {
+          const b64 = uri.split(',')[1];
+          const txt = atob(b64);
+          return JSON.parse(txt);
+        } catch { return null; }
+      }
+      return null; // remote HTTP(S) JSON handled in loadNFTs via fetch
+    }
+
+    function ipfsToHttp(u) {
+      if (!u) return u;
+      if (typeof u !== 'string') return u;
+      if (u.startsWith('ipfs://')) {
+        let path = u.slice(7); // remove scheme
+        // normalize leading ipfs/
+        if (path.startsWith('ipfs/')) {
+          return 'https://ipfs.io/' + path;
+        }
+        return 'https://ipfs.io/ipfs/' + path;
+      }
+      return u;
+    }
+
+    function resolveUrl(u) {
+      if (!u) return u;
+      if (u.startsWith('ipfs://')) return ipfsToHttp(u);
+      return u;
+    }
+
+    async function fetchJsonSafe(u, timeoutMs = 8000) {
+      const tryFetch = async (url) => {
+        const controller = new AbortController();
+        const id = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+          const resp = await fetch(url, { mode: 'cors', signal: controller.signal });
+          if (!resp.ok) return null;
+          return await resp.json();
+        } catch (_) {
+          return null;
+        } finally {
+          clearTimeout(id);
+        }
+      };
+
+      // First attempt
+      let res = await tryFetch(u);
+      if (res) return res;
+
+      // If it's ipfs.io, try alternate gateways
+      const gateways = ['https://cloudflare-ipfs.com', 'https://dweb.link'];
+      if (typeof u === 'string' && u.startsWith('https://ipfs.io')) {
+        for (const gw of gateways) {
+          const alt = gw + u.slice('https://ipfs.io'.length);
+          res = await tryFetch(alt);
+          if (res) return res;
+        }
+      }
+      return null;
+    }
+
+    async function resolvePrizeImage(uri) {
+      if (!uri) return '';
+      if (uri.startsWith('data:application/json;base64,')) {
+        const md = parseTokenMetadata(uri);
+        return md && md.image ? resolveUrl(md.image) : '';
+      }
+      if (uri.startsWith('data:image')) return uri;
+      let resolved = resolveUrl(uri);
+      if (/\.json(\?|#|$)/i.test(resolved)) {
+        const md = await fetchJsonSafe(resolved);
+        if (md && md.image) return resolveUrl(md.image);
+        return '';
+      }
+      // try fetch as JSON anyway; if fails, assume it's direct image link
+      if (/^https?:\/\//i.test(resolved)) {
+        const md = await fetchJsonSafe(resolved);
+        if (md && md.image) return resolveUrl(md.image);
+      }
+      return resolved;
+    }
+
+    // For displaying images safely under HTTPS and avoiding referer-based hotlinking
+    function displayImageUrl(u) {
+      if (!u || typeof u !== 'string') return u;
+      // do not transform data URLs or ipfs (already resolved elsewhere)
+      if (u.startsWith('data:') || u.startsWith('ipfs://')) return u;
+      if (u.startsWith('http://')) {
+        const noScheme = u.replace(/^https?:\/\//, '');
+        return 'https://images.weserv.nl/?url=' + encodeURIComponent(noScheme);
+      }
+      return u;
+    }
+
+    // Calculate offset/limit for reverse-ordered pagination (newest first)
+    function calcReversePagination(total, page, size) {
+      const pages = Math.max(1, Math.ceil(Number(total || 0) / size));
+      const p = Math.min(page, pages);
+      const start = Math.max(0, Number(total || 0) - p * size);
+      const limit = Math.max(0, Math.min(size, Number(total || 0) - start));
+      return { offset: start, limit };
+    }
+
+    createApp({
+      setup() {
+        const account = ref('');
+        const networkId = ref('');
+        const blogAddress = ref(BLOG_ADDRESS);
+        const totalPosts = ref(0);
+        const posts = ref([]);
+        const prizes = ref([]);
+        const drawCost = ref(50);
+        const profile = reactive({ nickname: '', avatar: '', bio: '' });
+        const points = ref(0);
+        const nfts = ref([]);
+
+        const connecting = ref(false);
+        const posting = ref(false);
+        const loadingDraw = ref(false);
+        const savingProfile = ref(false);
+                const postFilter = ref('all');
+        const drawRecords = ref([]);
+        // rank modal state
+        const showRankModal = ref(false);
+        const rankTotal = ref(0);
+        const rankPageSize = ref(20);
+        const currentRankPage = ref(1);
+        const rankList = ref([]);
+        const loadingRank = ref(false);
+        const rankTotalPages = Vue.computed(() => Math.max(1, Math.ceil(Number(rankTotal.value || 0) / Number(rankPageSize.value || 1))));
+        const hasPrevRank = Vue.computed(() => currentRankPage.value > 1);
+        const hasNextRank = Vue.computed(() => currentRankPage.value < rankTotalPages.value);
+        // pagination state
+        const currentPageAll = ref(1);
+        const currentPageMine = ref(1);
+        const mineTotal = ref(0);
+        const totalPagesAll = Vue.computed(() => Math.max(1, Math.ceil(Number(totalPosts.value || 0) / POST_PAGE_SIZE)));
+        const totalPagesMine = Vue.computed(() => Math.max(1, Math.ceil(Number(mineTotal.value || 0) / POST_PAGE_SIZE)));
+        const currentPage = Vue.computed(() => postFilter.value === 'mine' ? currentPageMine.value : currentPageAll.value);
+        const totalPages = Vue.computed(() => postFilter.value === 'mine' ? totalPagesMine.value : totalPagesAll.value);
+        const hasPrev = Vue.computed(() => currentPage.value > 1);
+        const hasNext = Vue.computed(() => currentPage.value < totalPages.value);
+        const showDrawModal = ref(false);
+        const drawScanCursor = ref(0);
+        const drawScanEnd = ref(0);
+        const drawPageSize = ref(20);
+        const hasMoreDraw = ref(false);
+        const loadingMoreDraw = ref(false);
+        const viewAvatarErr = ref(false);
+        const editAvatarErr = ref(false);
+        const editingProfile = ref(false);
+        const editProfile = reactive({ nickname: '', avatar: '', bio: '' });
+        // edit modal state
+        const showEditModal = ref(false);
+        const editingPost = reactive({ id: null, title: '', content: '', url: '' });
+        const editSubmitting = ref(false);
+        const showCreateModal = ref(false);
+
+        let web3 = null;
+        let contract = null;
+        const hasProviderListeners = ref(false);
+
+                // Ensure read-only provider/contract for event queries (fallback to public RPC)
+        function ensureReadOnly() {
+          if (!web3) {
+            const provider = window.ethereum ? window.ethereum : 'https://carrot.megaeth.com/rpc';
+            web3 = new Web3(provider);
+          }
+          if (!contract) {
+            contract = new web3.eth.Contract(BLOG_ABI, blogAddress.value);
+          }
+        }
+        // Get event ABI by name from static BLOG_ABI
+        function getEventAbi(name) {
+          return BLOG_ABI.find(o => o && o.type === 'event' && o.name === name);
+        }
+
+        function registerProviderListeners() {
+          if (!window.ethereum || hasProviderListeners.value) return;
+          // 账户切换
+          window.ethereum.on('accountsChanged', async (accs) => {
+            try {
+              account.value = accs && accs.length ? accs[0] : '';
+              // 仅刷新与账号相关的数据，随后加载全局只读数据
+              if (account.value) {
+                await refreshMine();
+              } else {
+                // 清理本地展示
+                profile.nickname = '';
+                profile.avatar = '';
+                profile.bio = '';
+                points.value = 0;
+              }
+              await loadAll();
+            } catch (e) { console.error('accountsChanged handler error', e); }
+          });
+          // 网络切换
+          window.ethereum.on('chainChanged', async () => {
+            try {
+              // 重新实例化 provider/web3/contract
+              web3 = new Web3(window.ethereum);
+              contract = new web3.eth.Contract(BLOG_ABI, blogAddress.value);
+              networkId.value = await web3.eth.getChainId();
+              await loadAll();
+            } catch (e) { console.error('chainChanged handler error', e); }
+          });
+          // 断开连接
+          window.ethereum.on('disconnect', async () => {
+            try {
+              account.value = '';
+              await loadAll();
+            } catch (e) { console.error('disconnect handler error', e); }
+          });
+          hasProviderListeners.value = true;
+        }
+
+        const short = (addr) => addr ? (addr.slice(0,6) + '...' + addr.slice(-4)) : '';
+        const formatTime = (ts) => {
+          if (!ts) return '';
+          const d = new Date(Number(ts) * 1000);
+          return d.toLocaleString();
+        };
+        const networkDesc = Vue.computed(() => networkId.value ? `ChainId: ${networkId.value}` : '未连接');
+        function explorerTx(tx) {
+          const base = (Number(networkId.value) === 6342) ? 'https://megaexplorer.xyz' : '';
+          return base ? base + '/tx/' + tx : '';
+        }
+
+        async function connect() {
+          if (!window.ethereum) { alert('请安装 MetaMask'); return; }
+          try {
+            connecting.value = true;
+            const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+            account.value = accounts[0];
+            web3 = new Web3(window.ethereum);
+            networkId.value = await web3.eth.getChainId();
+            contract = new web3.eth.Contract(BLOG_ABI, blogAddress.value);
+
+            await loadAll();
+
+            // listeners
+            registerProviderListeners();
+          } catch (e) {
+            console.error(e);
+            alert('连接失败: ' + (e?.message || e));
+          } finally {
+            connecting.value = false;
+          }
+        }
+
+        async function refreshMine() {
+          if (!contract) return;
+          try {
+            if (account.value) {
+              const prof = await contract.methods.getUserProfile(account.value).call();
+              profile.nickname = prof[0].nickname;
+              profile.avatar = prof[0].avatar;
+              profile.bio = prof[0].bio;
+              points.value = Number(prof[1]);
+            }
+            await loadNFTs();
+          } catch (e) {
+            console.error('refreshMine error', e);
+          }
+        }
+
+        async function loadAll() {
+          if (!contract) return;
+          try {
+            // total posts
+            totalPosts.value = Number(await contract.methods.getTotalPosts().call());
+
+            
+            // load posts according to filter and page
+            await loadPosts();
+
+            // load profile & points if connected
+            if (account.value) {
+              const prof = await contract.methods.getUserProfile(account.value).call();
+              profile.nickname = prof[0].nickname;
+              profile.avatar = prof[0].avatar;
+              profile.bio = prof[0].bio;
+              points.value = Number(prof[1]);
+            }
+
+            // prizes list
+            prizes.value = (await contract.methods.getPrizeList().call()).map(p => ({
+              name: p.name, uri: p.uri, weight: Number(p.weight), imageUrl: '', _imgErr: false
+            }));
+
+            await loadPrizeImages();
+
+            // draw cost is fixed at 50 in current contract; expose constant here
+            drawCost.value = 50;
+
+            // my NFTs
+            await loadNFTs();
+          } catch (e) {
+            console.error('loadAll error', e);
+          }
+        }
+
+        async function loadPosts() {
+          if (!contract) return;
+          try {
+            if (postFilter.value === 'mine') {
+              if (!account.value) { posts.value = []; mineTotal.value = 0; return; }
+                                          {
+                const total = Number(await contract.methods.getUserPostCount(account.value).call());
+                mineTotal.value = total;
+                if (total <= 0) { posts.value = []; return; }
+                const { offset, limit } = calcReversePagination(total, currentPageMine.value, POST_PAGE_SIZE);
+                const list = limit > 0 ? await contract.methods.getUserPosts(account.value, offset, limit).call() : [];
+                posts.value = (list || []).map(p => ({
+                  ...p,
+                  id: Number(p.id),
+                  commentCount: Number(p.commentCount),
+                  commenterCount: Number(p.commenterCount),
+                  timestamp: Number(p.timestamp),
+                  decodedContent: tryDecodeContent(p.content),
+                  _comment: '', _showComments: false, _comments: [], _loadingComments: false, _imgErr: false, _commenting: false, _retried: false,
+                })).reverse();
+              }
+            } else {
+              const total = Number(totalPosts.value || 0);
+              if (total <= 0) { posts.value = []; return; }
+              const { offset: start, limit } = calcReversePagination(total, currentPageAll.value, POST_PAGE_SIZE);
+              const list = limit > 0 ? await contract.methods.getPosts(start, limit).call() : [];
+              posts.value = (list || []).map(p => ({
+                ...p,
+                id: Number(p.id),
+                commentCount: Number(p.commentCount),
+                commenterCount: Number(p.commenterCount),
+                timestamp: Number(p.timestamp),
+                decodedContent: tryDecodeContent(p.content),
+                _comment: '', _showComments: false, _comments: [], _loadingComments: false, _imgErr: false, _commenting: false, _retried: false,
+              })).reverse();
+            }
+          } catch (e) { console.error('loadPosts error', e); }
+        }
+
+        function setPostFilter(v) {
+          postFilter.value = v;
+          if (v === 'mine') {
+            currentPageMine.value = 1;
+            loadPosts();
+          } else {
+            currentPageAll.value = 1;
+            loadPosts();
+          }
+        }
+
+        async function createPost() {
+          if (!account.value) return alert('请先连接钱包');
+          if (!newPost.title || !newPost.content) return alert('标题与内容不能为空');
+          try {
+            posting.value = true;
+            await contract.methods.createPost(newPost.title, encodeToBase64Gzip(newPost.content || ''), newPost.url || '').send({ from: account.value });
+            newPost.title = ''; newPost.content = ''; newPost.url = '';
+            showCreateModal.value = false;
+            await loadAll();
+          } catch (e) {
+            console.error(e);
+            alert('发布失败: ' + (e?.message || e));
+          } finally { posting.value = false; }
+        }
+
+                function openCreate() {
+          if (!account.value) return alert('请先连接钱包');
+          newPost.title = ''; newPost.url = ''; newPost.content = '';
+          showCreateModal.value = true;
+        }
+        function closeCreate() {
+          showCreateModal.value = false;
+        }
+
+        async function comment(p) {
+          if (!account.value) return alert('请先连接钱包');
+          if (!p._comment) return;
+          try {
+            p._commenting = true;
+            await contract.methods.comment(p.id, p._comment).send({ from: account.value });
+            p._comment = '';
+            await loadComments(p);
+          } catch (e) {
+            console.error(e);
+            alert('评论失败: ' + (e?.message || e));
+          } finally { p._commenting = false; }
+        }
+
+        async function toggleComments(p) {
+          p._showComments = !p._showComments;
+          if (p._showComments && (!p._comments || p._comments.length === 0)) {
+            await loadComments(p);
+          }
+        }
+
+        async function loadComments(p) {
+          if (!contract || !web3) return;
+          try {
+            p._loadingComments = true;
+            // Query past events for this postId (chunked to avoid provider max block range limits)
+            const eventAbi = getEventAbi('Comment');
+            const signature = web3.eth.abi.encodeEventSignature(eventAbi);
+            let topicPostId = web3.utils.padLeft(web3.utils.numberToHex(p.id), 64);
+            if (!topicPostId.startsWith('0x')) { topicPostId = '0x' + topicPostId; }
+
+            // use shared constants
+            const MAX_LOG_RANGE = LOG_MAX_RANGE; // less than provider max range
+            const DEFAULT_SEARCH_DEPTH = EVENT_SEARCH_DEPTH; // search recent N blocks; adjustable
+            const latest = await web3.eth.getBlockNumber();
+            const start = Math.max(0, latest - DEFAULT_SEARCH_DEPTH);
+
+            let logs = [];
+            for (let fromBlock = start; fromBlock <= latest; ) {
+              const toBlock = Math.min(latest, fromBlock + MAX_LOG_RANGE - 1);
+              const chunk = await web3.eth.getPastLogs({
+                fromBlock,
+                toBlock,
+                address: contract.options.address,
+                topics: [signature, null, topicPostId]
+              });
+              logs = logs.concat(chunk);
+              fromBlock = toBlock + 1;
+            }
+
+            const parsed = logs.map(l => web3.eth.abi.decodeLog(eventAbi.inputs, l.data, l.topics.slice(1)));
+            p._comments = parsed.map(x => ({
+              commenter: x.commenter,
+              postId: Number(x.postId),
+              content: x.content,
+              timestamp: Number(x.timestamp)
+            })).sort((a,b) => b.timestamp - a.timestamp);
+          } catch (e) {
+            console.error('loadComments error', e);
+          } finally {
+            p._loadingComments = false;
+          }
+        }
+
+        function startEditProfile() {
+          editProfile.nickname = profile.nickname;
+          editProfile.avatar = profile.avatar;
+          editProfile.bio = profile.bio;
+          editAvatarErr.value = false;
+          editingProfile.value = true;
+        }
+
+        function cancelEditProfile() {
+          editingProfile.value = false;
+        }
+
+        async function saveProfile() {
+          if (!account.value) return alert('请先连接钱包');
+          try {
+            savingProfile.value = true;
+            await contract.methods.setProfile(editProfile.nickname||'', editProfile.avatar||'', editProfile.bio||'').send({ from: account.value });
+            profile.nickname = editProfile.nickname || '';
+            profile.avatar = editProfile.avatar || '';
+            profile.bio = editProfile.bio || '';
+            editingProfile.value = false;
+            viewAvatarErr.value = false;
+            await loadAll();
+          } catch (e) {
+            console.error(e);
+            alert('保存失败: ' + (e?.message || e));
+          } finally { savingProfile.value = false; }
+        }
+
+        async function draw() {
+          if (!account.value) return alert('请先连接钱包');
+          if (points.value < drawCost.value) return alert('积分不足，无法抽奖');
+          try {
+            loadingDraw.value = true;
+            await contract.methods.draw().send({ from: account.value });
+            await loadAll();
+            alert('抽奖完成，检查 NFT 列表');
+          } catch (e) {
+            console.error(e);
+            alert('抽奖失败: ' + (e?.message || e));
+          } finally { loadingDraw.value = false; }
+        }
+
+        
+        
+        // rank handlers
+        async function openRank() {
+          showRankModal.value = true;
+          await initRank();
+        }
+        function closeRank() { showRankModal.value = false; }
+        async function initRank() {
+          try {
+            ensureReadOnly();
+            rankTotal.value = Number(await contract.methods.getAuthorsTotal().call());
+            currentRankPage.value = 1;
+            await loadRankPage();
+          } catch (e) { console.error('initRank error', e); }
+        }
+        async function loadRankPage() {
+          ensureReadOnly();
+          if (!contract || !web3) return;
+          try {
+            loadingRank.value = true;
+            const size = Number(rankPageSize.value || 20);
+            const p = Math.max(1, Number(currentRankPage.value || 1));
+            const offset = (p - 1) * size;
+            const limit = Math.max(0, Math.min(size, Number(rankTotal.value || 0) - offset));
+            let addrs = [], counts = [];
+            if (limit > 0) {
+              const res = await contract.methods.getAuthorsRank(offset, limit).call();
+              if (Array.isArray(res) && res.length === 2) {
+                addrs = res[0]; counts = res[1];
+              } else {
+                addrs = res.addrs || []; counts = res.counts || [];
+              }
+            }
+            rankList.value = addrs.map((addr, i) => ({ address: addr, count: Number(counts[i] || 0) }));
+          } catch (e) {
+            console.error('loadRankPage error', e);
+          } finally { loadingRank.value = false; }
+        }
+        function prevRank() { if (currentRankPage.value > 1) { currentRankPage.value--; loadRankPage(); } }
+        function nextRank() { if (currentRankPage.value < rankTotalPages.value) { currentRankPage.value++; loadRankPage(); } }
+
+        async function openDrawRecords() {
+          showDrawModal.value = true;
+          await initDrawRecords();
+        }
+        function closeDrawRecords() { showDrawModal.value = false; }
+
+        async function initDrawRecords() {
+          try {
+            ensureReadOnly();
+            drawRecords.value = [];
+            const DEFAULT_SEARCH_DEPTH = EVENT_SEARCH_DEPTH; // search depth window
+            const latest = await web3.eth.getBlockNumber();
+            drawScanCursor.value = latest;
+            drawScanEnd.value = Math.max(0, latest - DEFAULT_SEARCH_DEPTH);
+            hasMoreDraw.value = true;
+            await loadMoreDrawRecords();
+          } catch (e) { console.error('initDrawRecords error', e); }
+        }
+
+        async function loadMoreDrawRecords() {
+          ensureReadOnly();
+          if (!contract || !web3) return;
+          try {
+            loadingMoreDraw.value = true;
+            const eventAbi = getEventAbi('NFTDrawn');
+            const signature = web3.eth.abi.encodeEventSignature(eventAbi);
+            const MAX_LOG_RANGE = LOG_MAX_RANGE;
+
+            let page = [];
+            while (page.length < drawPageSize.value && drawScanCursor.value >= drawScanEnd.value) {
+              const toBlock = drawScanCursor.value;
+              const fromBlock = Math.max(drawScanEnd.value, toBlock - MAX_LOG_RANGE + 1);
+              const chunk = await web3.eth.getPastLogs({ fromBlock, toBlock, address: contract.options.address, topics: [signature] });
+              const parsed = chunk.map(l => {
+                const d = web3.eth.abi.decodeLog(eventAbi.inputs, l.data, l.topics.slice(1));
+                return { user: d.user, tokenId: Number(d.tokenId), prizeName: d.prizeName, uri: d.uri, timestamp: Number(d.timestamp), blockNumber: l.blockNumber, tx: l.transactionHash };
+              }).sort((a,b) => b.blockNumber - a.blockNumber);
+
+              for (const rec of parsed) {
+                if (page.length < drawPageSize.value) page.push(rec);
+              }
+
+              drawScanCursor.value = fromBlock - 1;
+            }
+
+            // resolve image urls for each record
+            const imgs = await Promise.all(page.map(r => resolvePrizeImage(r.uri)));
+            for (let i = 0; i < page.length; i++) {
+              page[i]._imageUrl = imgs[i] || '';
+              page[i]._imgErr = false;
+              page[i]._retried = false;
+            }
+
+            drawRecords.value = drawRecords.value.concat(page);
+            hasMoreDraw.value = drawScanCursor.value >= drawScanEnd.value;
+          } catch (e) {
+            console.error('loadMoreDrawRecords error', e);
+          } finally { loadingMoreDraw.value = false; }
+        }
+
+        async function loadNFTs() {
+          if (!account.value || !contract) { nfts.value = []; return; }
+          try {
+            const tokenIds = await contract.methods.getOwnedTokens(account.value).call();
+            const list = [];
+            for (const tid of tokenIds) {
+              const rawURI = await contract.methods.tokenURI(tid).call();
+              const uriResolved = resolveUrl(rawURI);
+              let metadata = parseTokenMetadata(rawURI);
+
+              if (!metadata && uriResolved && uriResolved.startsWith('http')) {
+                try {
+                  const resp = await fetch(uriResolved, { mode: 'cors' });
+                  if (resp.ok) {
+                    metadata = await resp.json();
+                  }
+                } catch (err) {
+                  console.warn('fetch metadata failed', uriResolved, err);
+                }
+              }
+
+              let imageUrl = '';
+              if (metadata && metadata.image) {
+                imageUrl = resolveUrl(metadata.image);
+              }
+
+              list.push({ tokenId: Number(tid), tokenURI: rawURI, uriResolved, metadata, imageUrl });
+            }
+            nfts.value = list.sort((a, b) => b.tokenId - a.tokenId);
+          } catch (e) { console.error('loadNFTs error', e); }
+        }
+
+        async function loadPrizeImages() {
+          try {
+            const arr = prizes.value || [];
+            const imgs = await Promise.all(arr.map(p => resolvePrizeImage(p.uri)));
+            for (let i = 0; i < arr.length; i++) {
+              arr[i].imageUrl = displayImageUrl(imgs[i] || '');
+              arr[i]._imgErr = false;
+            }
+          } catch (e) {
+            console.warn('loadPrizeImages error', e);
+          }
+        }
+
+        // Strip CDN style suffix like `!dp6` that may break hotlinking/proxying
+        function stripImageStyle(u) {
+          if (!u || typeof u !== 'string') return u;
+          // keep query/hash, only strip the first '!' between path and query/hash
+          const q = u.indexOf('?');
+          const h = u.indexOf('#');
+          const end = (q !== -1 && h !== -1) ? Math.min(q, h) : (q !== -1 ? q : (h !== -1 ? h : u.length));
+          const bang = u.indexOf('!');
+          if (bang !== -1 && bang < end) {
+            return u.slice(0, bang) + u.slice(end);
+          }
+          return u;
+        }
+
+        // Fallback handler for draw record images to handle style suffix like .jpeg!dp6
+        function onRecordImgError(r) {
+          try {
+            if (!r._retried && typeof r._imageUrl === 'string' && r._imageUrl.includes('!')) {
+              const stripped = stripImageStyle(r._imageUrl);
+              if (stripped && stripped !== r._imageUrl) {
+                r._retried = true;
+                r._imgErr = false;
+                r._imageUrl = stripped;
+                return;
+              }
+            }
+          } catch (_) {}
+          r._imgErr = true;
+        }
+
+        // Similar fallback for post cover images
+        function onPostImgError(p) {
+          try {
+            if (!p._retried && typeof p.url === 'string' && p.url.includes('!')) {
+              const stripped = stripImageStyle(p.url);
+              if (stripped && stripped !== p.url) {
+                p._retried = true;
+                p._imgErr = false;
+                p.url = stripped;
+                return;
+              }
+            }
+          } catch (_) {}
+          p._imgErr = true;
+        }
+
+        // Edit post modal handlers
+        function openEdit(p) {
+          if (!account.value) return alert('请先连接钱包');
+          if (!p || !p.author || account.value.toLowerCase() !== String(p.author).toLowerCase()) {
+            return alert('仅作者可编辑');
+          }
+          editingPost.id = p.id;
+          editingPost.title = p.title || '';
+          editingPost.content = p.decodedContent ?? tryDecodeContent(p.content || '');
+          editingPost.url = p.url || '';
+          showEditModal.value = true;
+        }
+        function closeEdit() {
+          showEditModal.value = false;
+          editingPost.id = null;
+          editingPost.title = '';
+          editingPost.content = '';
+          editingPost.url = '';
+        }
+        async function submitEdit() {
+          if (!account.value) return alert('请先连接钱包');
+          if (editingPost.id === null || editingPost.id === undefined) return alert('无效的文章');
+          try {
+            editSubmitting.value = true;
+            await contract.methods.editPost(editingPost.id, editingPost.title || '', encodeToBase64Gzip(editingPost.content || ''), editingPost.url || '').send({ from: account.value });
+            showEditModal.value = false;
+            await loadAll();
+            alert('已保存');
+          } catch (e) {
+            console.error(e);
+            alert('保存失败: ' + (e?.message || e));
+          } finally {
+            editSubmitting.value = false;
+          }
+        }
+
+        
+        function prevPage() {
+          if (postFilter.value === 'mine') {
+            if (currentPageMine.value > 1) { currentPageMine.value--; loadPosts(); }
+          } else {
+            if (currentPageAll.value > 1) { currentPageAll.value--; loadPosts(); }
+          }
+        }
+        function nextPage() {
+          if (postFilter.value === 'mine') {
+            if (currentPageMine.value < totalPagesMine.value) { currentPageMine.value++; loadPosts(); }
+          } else {
+            if (currentPageAll.value < totalPagesAll.value) { currentPageAll.value++; loadPosts(); }
+          }
+        }
+
+        const newPost = reactive({ title: '', content: '', url: '' });
+
+        onMounted(() => {
+          try {
+            // Always init a read-only provider (wallet or public RPC)
+            ensureReadOnly();
+            web3.eth.getChainId().then(id => networkId.value = id).catch(()=>{});
+            if (window.ethereum) {
+              registerProviderListeners();
+            } else {
+              console.warn('未检测到钱包扩展，使用公共 RPC 以只读模式加载');
+            }
+            loadAll();
+          } catch (e) {
+            console.warn('初始化失败', e);
+          }
+        });
+
+        async function copy(text) {
+          try {
+            await navigator.clipboard.writeText(text);
+            alert('已复制');
+          } catch (e) {
+            console.warn('clipboard failed, fallback via prompt', e);
+            window.prompt('复制以下内容到剪贴板:', text);
+          }
+        }
+
+        return { account, connecting, connect, refreshMine, networkDesc, short, blogAddress,
+                 newPost, createPost, totalPosts, posts, comment, toggleComments, formatTime,
+                 // create modal
+                 showCreateModal, openCreate, closeCreate,
+                 profile, points, draw, drawCost, prizes, nfts, loadAll,
+                 // filters
+                 postFilter, setPostFilter,
+                 // draws
+                 drawRecords, showDrawModal, openDrawRecords, closeDrawRecords,
+                 // profile view/edit
+                 editingProfile, editProfile, startEditProfile, cancelEditProfile,
+                 viewAvatarErr, editAvatarErr, saveProfile,
+                 // utils
+                 copy, displayImageUrl, resolveUrl, explorerTx,
+                 // draw pagination
+                 loadMoreDrawRecords, hasMoreDraw, loadingMoreDraw, drawPageSize,
+                 // rank modal
+                 showRankModal, openRank, closeRank, initRank, loadRankPage,
+                 rankList, rankTotal, rankPageSize, currentRankPage, loadingRank, rankTotalPages, hasPrevRank, hasNextRank,
+                 // image error fallback
+                 onRecordImgError, onPostImgError,
+                 // edit modal
+                 showEditModal, editingPost, openEdit, closeEdit, submitEdit, editSubmitting,
+                 // posts pagination
+                 currentPage, totalPages, hasPrev, hasNext, prevPage, nextPage };
+      }
+    }).mount('#app');
+  </script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+networks:
+  default: megaeth-testnet
+  megaeth-testnet:
+    host: https://carrot.megaeth.com/rpc
+    gas_price: 0.01 gwei
+    gas_limit: 1000000
+# dependencies:
+#   - OpenZeppelin/openzeppelin-contracts-upgradeable@4.9.3
+
+# compiler:
+#   solc:
+#     version: 0.8.20
+#     remappings:
+#       - '@openzeppelin/contracts-upgradeable=OpenZeppelin/openzeppelin-contracts-upgradeable@4.9.3/contracts'
