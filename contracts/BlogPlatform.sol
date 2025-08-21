@@ -5,8 +5,11 @@ import "OpenZeppelin/openzeppelin-contracts-upgradeable@4.9.3/contracts/token/ER
 import "OpenZeppelin/openzeppelin-contracts-upgradeable@4.9.3/contracts/proxy/utils/UUPSUpgradeable.sol";
 import "OpenZeppelin/openzeppelin-contracts-upgradeable@4.9.3/contracts/access/OwnableUpgradeable.sol";
 import "OpenZeppelin/openzeppelin-contracts-upgradeable@4.9.3/contracts/proxy/utils/Initializable.sol";
+import "OpenZeppelin/openzeppelin-contracts-upgradeable@4.9.3/contracts/token/ERC20/IERC20Upgradeable.sol";
+import "OpenZeppelin/openzeppelin-contracts-upgradeable@4.9.3/contracts/token/ERC20/utils/SafeERC20Upgradeable.sol";
 
 contract BlogPlatform is Initializable, ERC721URIStorageUpgradeable, UUPSUpgradeable, OwnableUpgradeable {
+    using SafeERC20Upgradeable for IERC20Upgradeable;
 
     struct Post {
         uint256 id;
@@ -49,26 +52,31 @@ contract BlogPlatform is Initializable, ERC721URIStorageUpgradeable, UUPSUpgrade
     error ContentTooLong();
 
     uint256 public constant MAX_COMMENT_LENGTH = 1000;
-
-    // Per-user post index for O(1) count and efficient pagination
     mapping(address => uint256[]) private userPostIds;
-    // Mark users whose index has been initialized (via createPost or rebuild)
     mapping(address => bool) private userIndexInitialized;
-    // tmp marker used only during rebuildAllUserIndexes to avoid repeated delete
-    mapping(address => bool) private _rebuildCleared;
 
     // Authors registry for ranking
     address[] private authors;
     mapping(address => bool) public isAuthor;
 
+    // TT redeem config and state (minimal)
+    IERC20Upgradeable public ttToken; // TT token contract
+    uint8 public ttDecimals; // TT token decimals
+    uint256 public ttAmountPerRedeem; // TT amount per redeem (in smallest unit)
+    mapping(address => uint256) public dailyRedeemCount; // today's redeem count per user
+    mapping(address => uint256) public dailyRedeemDay; // the day number (block.timestamp / 1 days) for daily count
+    uint256 public constant REDEEM_POINTS_COST = 50; // fixed points cost per redeem
+    uint256 public constant DAILY_MAX_REDEEMS = 3; // fixed daily limit per address
+
+    
     event PostCreated(uint256 indexed postId, address indexed author, string title);
     event Comment(address indexed commenter, uint256 indexed postId, string content, uint256 timestamp);
     event ProfileUpdated(address indexed user, string nickname);
     event PrizeAdded(string name, string uri, uint256 weight);
     event NFTDrawn(address indexed user, uint256 tokenId, string prizeName, string uri, uint256 timestamp);
     event PostEdited(uint256 indexed postId, address indexed editor);
+    event TTRedeemed(address indexed user, uint256 pointsCost, uint256 amount);
 
-    /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
         _disableInitializers(); // 防止实现合约被初始化
     }
@@ -81,6 +89,10 @@ contract BlogPlatform is Initializable, ERC721URIStorageUpgradeable, UUPSUpgrade
 
         drawCost = 50;
         tokenIdCounter = 1;
+
+        // default TT config
+        ttDecimals = 18;
+        ttAmountPerRedeem = 50 * (10 ** uint256(18));
     }
 
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
@@ -169,9 +181,44 @@ contract BlogPlatform is Initializable, ERC721URIStorageUpgradeable, UUPSUpgrade
         emit NFTDrawn(msg.sender, tokenIdCounter, prizes[selected].name, prizes[selected].uri, block.timestamp);
         tokenIdCounter++;
     }
+    
+   // 积分兑换 TT
+    function redeemTT() external {
+        require(points[msg.sender] >= REDEEM_POINTS_COST, "Not enough points");
+        require(address(ttToken) != address(0), "TT token not set");
+
+        // Daily limit: fixed 3 times per day
+        uint256 day = block.timestamp / 1 days;
+        if (dailyRedeemDay[msg.sender] != day) {
+            dailyRedeemDay[msg.sender] = day;
+            dailyRedeemCount[msg.sender] = 0;
+        }
+        require(dailyRedeemCount[msg.sender] < DAILY_MAX_REDEEMS, "Redeem limit reached");
+
+        uint256 amount = ttAmountPerRedeem;
+        require(amount > 0, "Invalid TT amount");
+        require(ttToken.balanceOf(address(this)) >= amount, "Insufficient TT in contract");
+
+        // Deduct points then transfer
+        points[msg.sender] -= REDEEM_POINTS_COST;
+        ttToken.safeTransfer(msg.sender, amount);
+
+        dailyRedeemCount[msg.sender] += 1;
+
+        emit TTRedeemed(msg.sender, REDEEM_POINTS_COST, amount);
+    }
 
     // 管理员功能 👇
 
+    // 设置 TT 代币与小数位
+    function setTTToken(address token, uint8 decimals_) external onlyOwner {
+        require(token != address(0), "invalid token");
+        ttToken = IERC20Upgradeable(token);
+        ttDecimals = decimals_;
+        ttAmountPerRedeem = 50 * (10 ** uint256(decimals_));
+    }
+
+    
     function addPrize(string memory name, string memory uri, uint256 weight) external onlyOwner {
         prizes.push(Prize(name, uri, weight));
         emit PrizeAdded(name, uri, weight);
@@ -187,6 +234,10 @@ contract BlogPlatform is Initializable, ERC721URIStorageUpgradeable, UUPSUpgrade
         }
         postCount = 0;
     }
+
+    // Allow contract to receive native tokens for airdrop funding
+    receive() external payable {}
+
     // 查询功能 👇
 
     function getPost(uint256 postId) external view returns (Post memory) {
@@ -194,6 +245,9 @@ contract BlogPlatform is Initializable, ERC721URIStorageUpgradeable, UUPSUpgrade
     }
 
     function getPosts(uint256 offset, uint256 limit) external view returns (Post[] memory result) {
+        if (offset >= postCount) {
+            return result; // empty
+        }
         uint256 end = offset + limit;
         if (end > postCount) {
             end = postCount;
@@ -265,33 +319,6 @@ contract BlogPlatform is Initializable, ERC721URIStorageUpgradeable, UUPSUpgrade
         }
     }
 
-    // Rebuild indexes for all users from posts[]
-    function rebuildAllUserIndexes() external onlyOwner returns (uint256 users, uint256 totalIndexed) {
-        // reset authors list (mapping isAuthor persists to not lose historical flags; will set true again during build)
-        delete authors;
-        // First pass: for each post's author, clear once and mark initialized, then push postId
-        for (uint256 i = 0; i < postCount; ) {
-            address a = posts[i].author;
-            if (!_rebuildCleared[a]) {
-                delete userPostIds[a];
-                _rebuildCleared[a] = true;
-                userIndexInitialized[a] = true;
-                if (!isAuthor[a]) { isAuthor[a] = true; }
-                authors.push(a);
-                unchecked { ++users; }
-            }
-            userPostIds[a].push(i);
-            unchecked { ++totalIndexed; ++i; }
-        }
-        // Second pass: reset temp markers
-        for (uint256 i = 0; i < postCount; ) {
-            address a = posts[i].author;
-            if (_rebuildCleared[a]) {
-                _rebuildCleared[a] = false;
-            }
-            unchecked { ++i; }
-        }
-    }
 
     function getUserProfile(address user) external view returns (Profile memory, uint256 point) {
         return (profiles[user], points[user]);
@@ -306,58 +333,80 @@ contract BlogPlatform is Initializable, ERC721URIStorageUpgradeable, UUPSUpgrade
     }
 
     function getAuthorsTotal() external view returns (uint256) {
-        return authors.length;
+        uint256 n = postCount;
+        if (n == 0) return 0;
+        address[] memory uniq = new address[](n);
+        uint256 u = 0;
+        for (uint256 i = 0; i < n; ) {
+            address a = posts[i].author;
+            bool exists = false;
+            for (uint256 j = 0; j < u; ) {
+                if (uniq[j] == a) { exists = true; break; }
+                unchecked { ++j; }
+            }
+            if (!exists) {
+                uniq[u] = a;
+                unchecked { ++u; }
+            }
+            unchecked { ++i; }
+        }
+        return u;
     }
 
     // 排行榜：返回作者地址与发文数，按发文数降序，支持分页
     function getAuthorsRank(uint256 offset, uint256 limit) external view returns (address[] memory addrs, uint256[] memory counts) {
-        uint256 n = authors.length;
-        if (offset >= n) {
-            return (addrs, counts);
-        }
-        address[] memory a = new address[](n);
-        uint256[] memory c = new uint256[](n);
+        uint256 n = postCount;
+        if (n == 0) { return (addrs, counts); }
+
+        // 收集唯一作者与对应发文数（基于 posts 统计）
+        address[] memory uniq = new address[](n);
+        uint256[] memory cnts = new uint256[](n);
+        uint256 u = 0;
         for (uint256 i = 0; i < n; ) {
-            address u = authors[i];
-            a[i] = u;
-            uint256 len = userPostIds[u].length;
-            if (len == 0 && !userIndexInitialized[u]) {
-                uint256 cnt = 0;
-                for (uint256 j = 0; j < postCount; ) {
-                    if (posts[j].author == u) { unchecked { ++cnt; } }
-                    unchecked { ++j; }
-                }
-                c[i] = cnt;
+            address a = posts[i].author;
+            bool found = false;
+            uint256 idx = 0;
+            for (uint256 j = 0; j < u; ) {
+                if (uniq[j] == a) { found = true; idx = j; break; }
+                unchecked { ++j; }
+            }
+            if (found) {
+                unchecked { ++cnts[idx]; }
             } else {
-                c[i] = len;
+                uniq[u] = a;
+                cnts[u] = 1;
+                unchecked { ++u; }
             }
             unchecked { ++i; }
         }
-        // selection sort desc by count
-        for (uint256 i = 0; i < n; ) {
+
+        // 仅对前 u 个元素按发文数降序排序
+        for (uint256 i = 0; i < u; ) {
             uint256 maxIdx = i;
-            for (uint256 j = i + 1; j < n; ) {
-                if (c[j] > c[maxIdx]) { maxIdx = j; }
+            for (uint256 j = i + 1; j < u; ) {
+                if (cnts[j] > cnts[maxIdx]) { maxIdx = j; }
                 unchecked { ++j; }
             }
             if (maxIdx != i) {
-                (c[i], c[maxIdx]) = (c[maxIdx], c[i]);
-                (a[i], a[maxIdx]) = (a[maxIdx], a[i]);
+                (cnts[i], cnts[maxIdx]) = (cnts[maxIdx], cnts[i]);
+                (uniq[i], uniq[maxIdx]) = (uniq[maxIdx], uniq[i]);
             }
             unchecked { ++i; }
         }
+
+        if (offset >= u) { return (addrs, counts); }
         uint256 end = offset + limit;
-        if (end > n) end = n;
+        if (end > u) end = u;
         uint256 m = end - offset;
         addrs = new address[](m);
         counts = new uint256[](m);
         for (uint256 i = 0; i < m; ) {
-            addrs[i] = a[offset + i];
-            counts[i] = c[offset + i];
+            addrs[i] = uniq[offset + i];
+            counts[i] = cnts[offset + i];
             unchecked { ++i; }
         }
     }
-
+    // 获取我的NFT
     function getOwnedTokens(address owner) external view returns (uint256[] memory) {
         uint256 balance = balanceOf(owner);
         uint256[] memory tokenIds = new uint256[](balance);
