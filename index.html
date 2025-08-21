@@ -3071,6 +3071,41 @@
             // Check if in MetaMask mobile browser
             const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
             const isMetaMaskBrowser = window.ethereum && window.ethereum.isMetaMask;
+
+            // Robust autoconnect for MetaMask mobile: wait for provider injection + user-gesture fallback
+            try {
+              const params = new URLSearchParams(window.location.search);
+              const needAuto = params.get('autoconnect') === '1';
+              if (needAuto && isMetaMaskBrowser) {
+                let called = false;
+                const doConnect = async () => {
+                  if (called) return;
+                  called = true;
+                  try { await connect(); } catch (_) {}
+                };
+                if (!window.ethereum) {
+                  // wait for provider injected
+                  window.addEventListener('ethereum#initialized', doConnect, { once: true });
+                  let tries = 0;
+                  const it = setInterval(() => {
+                    if (window.ethereum) { clearInterval(it); doConnect(); }
+                    if (++tries > 120) { clearInterval(it); }
+                  }, 50);
+                } else {
+                  setTimeout(doConnect, 0);
+                }
+                // Also trigger on first user interaction (some environments require gesture)
+                const gesture = () => { doConnect(); window.removeEventListener('touchstart', gesture); window.removeEventListener('click', gesture); };
+                window.addEventListener('touchstart', gesture, { once: true, passive: true });
+                window.addEventListener('click', gesture, { once: true });
+                // Clean URL
+                try {
+                  const url = new URL(window.location.href);
+                  url.searchParams.delete('autoconnect');
+                  history.replaceState({}, '', url.toString());
+                } catch (_) {}
+              }
+            } catch (_) {}
             
             if (isMobile && !isMetaMaskBrowser) {
               // Show a notice for mobile users not in MetaMask browser
