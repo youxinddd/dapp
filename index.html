@@ -338,6 +338,21 @@
     </div>
   </div>
 
+  <!-- View Full Content Modal -->
+  <div v-if="showContentModal" class="modal-overlay" @click.self="closeContent">
+    <div class="modal">
+      <div class="between mb12">
+        <h3>{{ contentModal.title || '全文' }}</h3>
+        <div class="flex">
+          <button class="secondary" @click="closeContent">关闭</button>
+        </div>
+      </div>
+      <div class="list">
+        <pre class="small" style="white-space: pre-wrap; word-break: break-word;">{{ contentModal.content }}</pre>
+      </div>
+    </div>
+  </div>
+
   <!-- Create Post Modal -->
   <div v-if="showCreateModal" class="modal-overlay" @click.self="closeCreate">
     <div class="modal">
@@ -462,7 +477,12 @@
               </a>
               <div v-if="p._imgErr" class="small muted">无法加载图片，<a :href="p.url" target="_blank">打开链接</a></div>
             </div>
-            <div class="mb12">{{ p.decodedContent ?? p.content }}</div>
+            <div class="mb12">
+              <div>{{ previewText(p) }}</div>
+              <div v-if="isLongContent(p)" class="small">
+                <button class="secondary" @click="openContent(p)">查看更多</button>
+              </div>
+            </div>
 
             <div class="small muted mb8">发表评论</div>
             <div class="flex mb8" style="flex-wrap: wrap; gap: 8px;">
@@ -2479,7 +2499,9 @@
                 if (!window.ethereum || !window.ethereum.isMetaMask) {
                   // Provide deep link to open in MetaMask browser
                   const currentUrl = window.location.href;
-                  const metamaskAppLink = `https://metamask.app.link/dapp/${currentUrl.replace(/^https?:\/\//, '')}`;
+                  const hasQuery = currentUrl.includes('?');
+                  const autoUrl = currentUrl + (hasQuery ? '&' : '?') + 'autoconnect=1';
+                  const metamaskAppLink = `https://metamask.app.link/dapp/${autoUrl.replace(/^https?:\/\//, '')}`;
                   
                   if (confirm('需要在 MetaMask 应用中打开此页面。点击确定跳转到 MetaMask。')) {
                     window.location.href = metamaskAppLink;
@@ -3023,6 +3045,27 @@
 
         const newPost = reactive({ title: '', content: '', url: '' });
 
+        // Content preview and modal for full content
+        const CONTENT_PREVIEW_LIMIT = 1000;
+        const showContentModal = ref(false);
+        const contentModal = reactive({ title: '', content: '' });
+        function getFullContent(p) { return (p && (p.decodedContent ?? p.content)) || ''; }
+        function isLongContent(p) { return getFullContent(p).length > CONTENT_PREVIEW_LIMIT; }
+        function previewText(p) {
+          const c = getFullContent(p);
+          return c.length > CONTENT_PREVIEW_LIMIT ? (c.slice(0, CONTENT_PREVIEW_LIMIT) + '...') : c;
+        }
+        function openContent(p) {
+          contentModal.title = p?.title || '';
+          contentModal.content = getFullContent(p);
+          showContentModal.value = true;
+        }
+        function closeContent() {
+          showContentModal.value = false;
+          contentModal.title = '';
+          contentModal.content = '';
+        }
+
         onMounted(() => {
           try {
             // Check if in MetaMask mobile browser
@@ -3033,6 +3076,22 @@
               // Show a notice for mobile users not in MetaMask browser
               console.info('移动设备检测：建议在 MetaMask 应用内浏览器中打开以获得最佳体验');
             }
+
+            // If we were deep-linked into MetaMask with autoconnect flag, trigger connect once
+            try {
+              const params = new URLSearchParams(window.location.search);
+              if (params.get('autoconnect') === '1' && isMetaMaskBrowser) {
+                setTimeout(() => {
+                  // remove the flag from URL to avoid repeated prompts on refresh
+                  try {
+                    const url = new URL(window.location.href);
+                    url.searchParams.delete('autoconnect');
+                    history.replaceState({}, '', url.toString());
+                  } catch (_) {}
+                  connect();
+                }, 300);
+              }
+            } catch (_) {}
             
             // Always init a read-only provider (wallet or public RPC)
             ensureReadOnly();
@@ -3077,6 +3136,8 @@
                  viewAvatarErr, editAvatarErr, saveProfile,
                  // utils
                  copy, displayImageUrl, resolveUrl, explorerTx,
+                 // content modal
+                 showContentModal, contentModal, openContent, closeContent, previewText, isLongContent,
                  // draw pagination
                  loadMoreDrawRecords, hasMoreDraw, loadingMoreDraw, drawPageSize,
                  // rank modal
