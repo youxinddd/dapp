@@ -318,15 +318,15 @@
       <div class="list">
         <div>
           <label>标题</label>
-          <input type="text" v-model="editingPost.title" placeholder="标题" />
+          <ime-input v-model="editingPost.title" placeholder="标题"></ime-input>
         </div>
         <div>
           <label>封面图 URL</label>
-          <input type="text" v-model="editingPost.url" placeholder="https://..." />
+          <ime-input v-model="editingPost.url" placeholder="https://..."></ime-input>
         </div>
         <div>
           <label>内容（已自动解码，保存时自动 base64+gzip 上链）</label>
-          <textarea v-model="editingPost.content" rows="4" placeholder="内容"></textarea>
+          <ime-textarea v-model="editingPost.content" rows="4" placeholder="内容"></ime-textarea>
         </div>
         <div class="between">
           <div class="small muted">仅作者可编辑，操作将消耗 Gas</div>
@@ -366,15 +366,15 @@
       <div class="list">
         <div>
           <label>标题</label>
-          <input type="text" v-model="newPost.title" placeholder="标题" />
+          <ime-input v-model="newPost.title" placeholder="标题"></ime-input>
         </div>
         <div>
           <label>封面图 URL</label>
-          <input type="text" v-model="newPost.url" placeholder="https://..." />
+          <ime-input v-model="newPost.url" placeholder="https://..."></ime-input>
         </div>
         <div>
           <label>内容（保存时自动 base64+gzip 上链；尽量简短）</label>
-          <textarea v-model="newPost.content" rows="4" placeholder="内容"></textarea>
+          <ime-textarea v-model="newPost.content" rows="4" placeholder="内容"></ime-textarea>
         </div>
         <div class="between">
           <div class="small muted">发布会消耗 Gas</div>
@@ -487,7 +487,7 @@
 
             <div class="small muted mb8">发表评论</div>
             <div class="flex mb8" style="flex-wrap: wrap; gap: 8px;">
-              <input type="text" v-model="p._comment" placeholder="评论内容" style="flex: 1; min-width: 150px;"/>
+              <ime-input v-model="p._comment" placeholder="评论内容" style="flex: 1; min-width: 150px;"></ime-input>
               <div class="flex" style="gap: 8px;">
                 <button @click="comment(p)" :disabled="!account || p._commenting">{{ p._commenting ? '发送中...' : '发送' }}</button>
                 <button class="secondary" @click="toggleComments(p)">{{ p._showComments? '收起' : '评论' }}</button>
@@ -557,11 +557,11 @@
         <div v-else class="list mb16">
           <div>
             <label>昵称</label>
-            <input type="text" v-model="editProfile.nickname" placeholder="昵称"/>
+            <ime-input v-model="editProfile.nickname" placeholder="昵称"></ime-input>
           </div>
           <div>
             <label>头像 URL</label>
-            <input type="text" v-model="editProfile.avatar" placeholder="https://..."/>
+            <ime-input v-model="editProfile.avatar" placeholder="https://..."></ime-input>
             <div v-if="editProfile.avatar" class="mb8">
               <img :src="displayImageUrl(editProfile.avatar)" alt="头像预览" class="avatar" v-if="!editAvatarErr" @error="editAvatarErr = true" referrerpolicy="no-referrer"/>
               <div v-else class="small muted">头像加载失败</div>
@@ -569,7 +569,7 @@
           </div>
           <div>
             <label>简介</label>
-            <input type="text" v-model="editProfile.bio" placeholder="一句话介绍"/>
+            <ime-input v-model="editProfile.bio" placeholder="一句话介绍"></ime-input>
           </div>
           <div class="flex">
             <button class="success" @click="saveProfile" :disabled="!account || savingProfile">{{ savingProfile ? '保存中...' : '保存' }}</button>
@@ -2381,7 +2381,63 @@
       return { offset: start, limit };
     }
 
-    createApp({
+    // IME-safe input/textarea components to work around MetaMask in-app browser IME bugs
+    const ImeInput = {
+      name: 'ImeInput',
+      inheritAttrs: false,
+      props: { modelValue: [String, Number], type: { type: String, default: 'text' } },
+      emits: ['update:modelValue'],
+      setup(props, { emit, attrs }) {
+        const val = Vue.ref(props.modelValue ?? '');
+        const composing = Vue.ref(false);
+        Vue.watch(() => props.modelValue, (v) => {
+          if (!composing.value && v !== val.value) val.value = v ?? '';
+        });
+        const onInput = (e) => {
+          val.value = e.target.value;
+          if (!composing.value) emit('update:modelValue', e.target.value);
+        };
+        const onCompStart = () => { composing.value = true; };
+        const onCompEnd = (e) => { composing.value = false; emit('update:modelValue', e.target.value); };
+        return () => Vue.h('input', {
+          ...attrs,
+          type: props.type || 'text',
+          value: val.value,
+          onInput,
+          onCompositionstart: onCompStart,
+          onCompositionend: onCompEnd,
+        });
+      }
+    };
+
+    const ImeTextarea = {
+      name: 'ImeTextarea',
+      inheritAttrs: false,
+      props: { modelValue: [String, Number] },
+      emits: ['update:modelValue'],
+      setup(props, { emit, attrs }) {
+        const val = Vue.ref(props.modelValue ?? '');
+        const composing = Vue.ref(false);
+        Vue.watch(() => props.modelValue, (v) => {
+          if (!composing.value && v !== val.value) val.value = v ?? '';
+        });
+        const onInput = (e) => {
+          val.value = e.target.value;
+          if (!composing.value) emit('update:modelValue', e.target.value);
+        };
+        const onCompStart = () => { composing.value = true; };
+        const onCompEnd = (e) => { composing.value = false; emit('update:modelValue', e.target.value); };
+        return () => Vue.h('textarea', {
+          ...attrs,
+          value: val.value,
+          onInput,
+          onCompositionstart: onCompStart,
+          onCompositionend: onCompEnd,
+        });
+      }
+    };
+
+    const app = createApp({
       setup() {
         const account = ref('');
         const networkId = ref('');
@@ -3267,7 +3323,11 @@
                  // redeem
                  showRedeemModal, openRedeem, closeRedeem, confirmRedeem, redeeming, redeemCost, redeemAmountTT, ttTokenAddress, explorerAddr, mineTotal };
       }
-    }).mount('#app');
+    });
+
+    app.component('ime-input', ImeInput);
+    app.component('ime-textarea', ImeTextarea);
+    app.mount('#app');
   </script>
 </body>
 </html>
