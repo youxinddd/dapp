@@ -402,6 +402,7 @@
           </span>
         </div>
         <button v-if="!account" @click="connect" :disabled="connecting">{{ connecting ? '连接中...' : '连接钱包' }}</button>
+        <button v-if="!account" class="secondary" @click="connectWC" :disabled="connecting">{{ connecting ? '连接中...' : 'WalletConnect' }}</button>
         <button v-else class="secondary" @click="refreshMine">刷新资料</button>
       </div>
     </header>
@@ -625,6 +626,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/web3/1.10.4/web3.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/vue@3.4.38/dist/vue.global.prod.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
+  <script src="https://unpkg.com/@walletconnect/ethereum-provider@2.11.2/dist/umd/index.min.js"></script>
 
   <script>
     // 配置：合约地址与 ABI（从合约源码构建的最小 ABI，涵盖本页使用到的函数/事件）
@@ -2212,6 +2214,20 @@
     }
   ];
 
+    // Target chain configuration (ensure wallet is on correct network)
+    const TARGET_CHAIN_ID = 6342;
+    const TARGET_CHAIN_HEX = '0x18C6'; // 6342 in hex
+    const TARGET_CHAIN_PARAMS = {
+      chainId: TARGET_CHAIN_HEX,
+      chainName: 'MegaETH',
+      nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+      rpcUrls: ['https://carrot.megaeth.com/rpc'],
+      blockExplorerUrls: ['https://megaexplorer.xyz']
+    };
+
+    // WalletConnect v2 projectId (请到 https://cloud.walletconnect.com 创建并替换为你的项目ID)
+    const WALLETCONNECT_PROJECT_ID = '4f47f3d145f2ee6f7a553c2dc5a785f5';
+
     const { createApp, ref, reactive, onMounted } = Vue;
 
     // Configurable event query constants
@@ -2419,6 +2435,61 @@
         let contract = null;
         const hasProviderListeners = ref(false);
 
+        // Ensure wallet is on the target chain (adds the chain if missing)
+        async function ensureCorrectChainAfterConnect(provider = (typeof window !== 'undefined' ? window.ethereum : null)) {
+          if (!provider || !provider.request) return;
+          try {
+            const currentHex = await provider.request({ method: 'eth_chainId' });
+            if (currentHex !== TARGET_CHAIN_HEX) {
+              try {
+                await provider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: TARGET_CHAIN_HEX }] });
+              } catch (switchError) {
+                if (switchError && switchError.code === 4902) {
+                  await provider.request({ method: 'wallet_addEthereumChain', params: [TARGET_CHAIN_PARAMS] });
+                } else {
+                  throw switchError;
+                }
+              }
+            }
+          } catch (e) {
+            console.warn('ensureCorrectChainAfterConnect failed', e);
+          }
+        }
+
+        // Generic EIP-1193 provider listeners (for injected or WalletConnect)
+        function registerProviderListenersGeneric(provider) {
+          if (!provider || hasProviderListeners.value) return;
+          provider.on && provider.on('accountsChanged', async (accs) => {
+            try {
+              account.value = accs && accs.length ? accs[0] : '';
+              if (account.value) {
+                await refreshMine();
+              } else {
+                profile.nickname = '';
+                profile.avatar = '';
+                profile.bio = '';
+                points.value = 0;
+              }
+              await loadAll();
+            } catch (e) { console.error('accountsChanged handler error', e); }
+          });
+          provider.on && provider.on('chainChanged', async () => {
+            try {
+              web3 = new Web3(provider);
+              contract = new web3.eth.Contract(BLOG_ABI, blogAddress.value);
+              networkId.value = await web3.eth.getChainId();
+              await loadAll();
+            } catch (e) { console.error('chainChanged handler error', e); }
+          });
+          provider.on && provider.on('disconnect', async () => {
+            try {
+              account.value = '';
+              await loadAll();
+            } catch (e) { console.error('disconnect handler error', e); }
+          });
+          hasProviderListeners.value = true;
+        }
+
                 // Ensure read-only provider/contract for event queries (fallback to public RPC)
         function ensureReadOnly() {
           if (!web3) {
@@ -2504,7 +2575,7 @@
                   const metamaskAppLink = `https://metamask.app.link/dapp/${autoUrl.replace(/^https?:\/\//, '')}`;
                   
                   if (confirm('需要在 MetaMask 应用中打开此页面。点击确定跳转到 MetaMask。')) {
-                    window.location.href = metamaskAppLink;
+                    window.location.replace(metamaskAppLink);
                   }
                   return;
                 }
@@ -2520,6 +2591,9 @@
             // MetaMask is available, proceed with connection
             const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
             account.value = accounts[0];
+
+            await ensureCorrectChainAfterConnect(window.ethereum);
+
             web3 = new Web3(window.ethereum);
             networkId.value = await web3.eth.getChainId();
             contract = new web3.eth.Contract(BLOG_ABI, blogAddress.value);
@@ -2538,6 +2612,52 @@
               alert('请在 MetaMask 中确认连接请求');
             } else {
               alert('连接失败: ' + (e?.message || e));
+            }
+          } finally {
+            connecting.value = false;
+          }
+        }
+
+        async function connectWC() {
+          try {
+            connecting.value = true;
+            if (!window.WalletConnectEthereumProvider || !window.WalletConnectEthereumProvider.init) {
+              alert('未加载 WalletConnect 组件，请检查网络或脚本引用');
+              return;
+            }
+            const provider = await window.WalletConnectEthereumProvider.init({
+              projectId: WALLETCONNECT_PROJECT_ID,
+              chains: [TARGET_CHAIN_ID],
+              optionalChains: [TARGET_CHAIN_ID],
+              rpcMap: { [TARGET_CHAIN_ID]: TARGET_CHAIN_PARAMS.rpcUrls[0] },
+              showQrModal: true,
+              metadata: {
+                name: '区块链博客 DApp',
+                description: 'Vue + Web3.js 示例',
+                url: window.location.origin,
+                icons: ['https://raw.githubusercontent.com/WalletConnect/walletconnect-assets/master/Icon/Blue%20(Default)/Icon.svg']
+              }
+            });
+
+            await provider.connect();
+            await ensureCorrectChainAfterConnect(provider);
+
+            web3 = new Web3(provider);
+            const accs = await web3.eth.getAccounts();
+            account.value = accs && accs[0] ? accs[0] : '';
+            networkId.value = await web3.eth.getChainId();
+            contract = new web3.eth.Contract(BLOG_ABI, blogAddress.value);
+
+            await loadAll();
+            registerProviderListenersGeneric(provider);
+          } catch (e) {
+            console.error(e);
+            if (e && (e.code === 4001 || e.code === 'USER_REJECTED')) {
+              alert('用户取消了 WalletConnect 连接');
+            } else if (e && e.message) {
+              alert('WalletConnect 连接失败: ' + e.message);
+            } else {
+              alert('WalletConnect 连接失败');
             }
           } finally {
             connecting.value = false;
@@ -3157,7 +3277,7 @@
           }
         }
 
-        return { account, connecting, connect, refreshMine, networkDesc, short, blogAddress,
+        return { account, connecting, connect, connectWC, refreshMine, networkDesc, short, blogAddress,
                  newPost, createPost, totalPosts, posts, comment, toggleComments, formatTime,
                  // create modal
                  showCreateModal, openCreate, closeCreate,
