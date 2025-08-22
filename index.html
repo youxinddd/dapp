@@ -318,15 +318,15 @@
       <div class="list">
         <div>
           <label>标题</label>
-          <input v-model.trim="editingPost.title" placeholder="标题" />
+          <input v-model="editingPost.title" placeholder="标题" />
         </div>
         <div>
           <label>封面图 URL</label>
-          <input v-model.trim="editingPost.url" placeholder="https://..." />
+          <input v-model="editingPost.url" placeholder="https://..." />
         </div>
         <div>
           <label>内容（已自动解码，保存时自动 base64+gzip 上链）</label>
-          <textarea v-model.trim="editingPost.content" rows="4" placeholder="内容"></textarea>
+          <textarea v-model="editingPost.content" rows="4" placeholder="内容"></textarea>
         </div>
         <div class="between">
           <div class="small muted">仅作者可编辑，操作将消耗 Gas</div>
@@ -366,15 +366,15 @@
       <div class="list">
         <div>
           <label>标题</label>
-          <input v-model.trim="newPost.title" placeholder="标题" />
+          <input v-model="newPost.title" placeholder="标题" />
         </div>
         <div>
           <label>封面图 URL</label>
-          <input v-model.trim="newPost.url" placeholder="https://..." />
+          <input v-model="newPost.url" placeholder="https://..." />
         </div>
         <div>
           <label>内容（保存时自动 base64+gzip 上链；尽量简短）</label>
-          <textarea v-model.trim="newPost.content" rows="4" placeholder="内容"></textarea>
+          <textarea v-model="newPost.content" rows="4" placeholder="内容"></textarea>
         </div>
         <div class="between">
           <div class="small muted">发布会消耗 Gas</div>
@@ -487,7 +487,7 @@
 
             <div class="small muted mb8">发表评论</div>
             <div class="flex mb8" style="flex-wrap: wrap; gap: 8px;">
-              <input v-model.trim="p._comment" placeholder="评论内容" style="flex: 1; min-width: 150px;"/>
+              <input v-model="p._comment" placeholder="评论内容" style="flex: 1; min-width: 150px;"/>
               <div class="flex" style="gap: 8px;">
                 <button @click="comment(p)" :disabled="!account || p._commenting">{{ p._commenting ? '发送中...' : '发送' }}</button>
                 <button class="secondary" @click="toggleComments(p)">{{ p._showComments? '收起' : '评论' }}</button>
@@ -557,11 +557,11 @@
         <div v-else class="list mb16">
           <div>
             <label>昵称</label>
-            <input v-model.trim="editProfile.nickname" placeholder="昵称"/>
+            <input v-model="editProfile.nickname" placeholder="昵称"/>
           </div>
           <div>
             <label>头像 URL</label>
-            <input v-model.trim="editProfile.avatar" placeholder="https://..."/>
+            <input v-model="editProfile.avatar" placeholder="https://..."/>
             <div v-if="editProfile.avatar" class="mb8">
               <img :src="displayImageUrl(editProfile.avatar)" alt="头像预览" class="avatar" v-if="!editAvatarErr" @error="editAvatarErr = true" referrerpolicy="no-referrer"/>
               <div v-else class="small muted">头像加载失败</div>
@@ -569,7 +569,7 @@
           </div>
           <div>
             <label>简介</label>
-            <input v-model.trim="editProfile.bio" placeholder="一句话介绍"/>
+            <input v-model="editProfile.bio" placeholder="一句话介绍"/>
           </div>
           <div class="flex">
             <button class="success" @click="saveProfile" :disabled="!account || savingProfile">{{ savingProfile ? '保存中...' : '保存' }}</button>
