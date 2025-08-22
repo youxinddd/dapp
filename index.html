@@ -627,6 +627,39 @@
   <script src="https://cdn.jsdelivr.net/npm/vue@3.4.38/dist/vue.global.prod.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
   <script src="https://unpkg.com/@walletconnect/ethereum-provider@2.11.2/dist/umd/index.min.js"></script>
+  <script>
+    // Fallback loader for WalletConnect Ethereum Provider (multi-CDN)
+    window.__loadWc = async function() {
+      try {
+        if (window.WalletConnectEthereumProvider && window.WalletConnectEthereumProvider.init) return true;
+      } catch (_) {}
+      const urls = [
+        'https://cdn.jsdelivr.net/npm/@walletconnect/ethereum-provider@2.11.2/dist/umd/index.min.js',
+        'https://fastly.jsdelivr.net/npm/@walletconnect/ethereum-provider@2.11.2/dist/umd/index.min.js',
+        'https://gcore.jsdelivr.net/npm/@walletconnect/ethereum-provider@2.11.2/dist/umd/index.min.js',
+        'https://unpkg.com/@walletconnect/ethereum-provider@2.11.2/dist/umd/index.min.js'
+      ];
+      for (const url of urls) {
+        try {
+          await new Promise((resolve, reject) => {
+            const s = document.createElement('script');
+            s.src = url;
+            s.async = true;
+            s.crossOrigin = 'anonymous';
+            s.onload = () => resolve();
+            s.onerror = () => reject(new Error('load failed'));
+            document.head.appendChild(s);
+          });
+          if (window.WalletConnectEthereumProvider && window.WalletConnectEthereumProvider.init) {
+            return true;
+          }
+        } catch (_) {
+          // try next url
+        }
+      }
+      return false;
+    };
+  </script>
 
   <script>
     // 配置：合约地址与 ABI（从合约源码构建的最小 ABI，涵盖本页使用到的函数/事件）
@@ -2225,7 +2258,7 @@
       blockExplorerUrls: ['https://megaexplorer.xyz']
     };
 
-    // WalletConnect v2 projectId (请到 https://cloud.walletconnect.com 创建并替换为你的项目ID)
+    // WalletConnect v2 projectId (请到 https://dashboard.reown.com/创建并替换为你的项目ID)
     const WALLETCONNECT_PROJECT_ID = '4f47f3d145f2ee6f7a553c2dc5a785f5';
 
     const { createApp, ref, reactive, onMounted } = Vue;
@@ -2622,8 +2655,11 @@
           try {
             connecting.value = true;
             if (!window.WalletConnectEthereumProvider || !window.WalletConnectEthereumProvider.init) {
-              alert('未加载 WalletConnect 组件，请检查网络或脚本引用');
-              return;
+              const ok = window.__loadWc ? await window.__loadWc() : false;
+              if (!ok || !window.WalletConnectEthereumProvider || !window.WalletConnectEthereumProvider.init) {
+                alert('未���载 WalletConnect 组件，请检查网络或脚本引用');
+                return;
+              }
             }
             const provider = await window.WalletConnectEthereumProvider.init({
               projectId: WALLETCONNECT_PROJECT_ID,
