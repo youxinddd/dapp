@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <meta name="format-detection" content="telephone=no" />
   <title>区块链博客 - Vue + Web3.js</title>
   <link rel="preconnect" href="https://cdn.jsdelivr.net"/>
   <link rel="preconnect" href="https://cdnjs.cloudflare.com"/>
@@ -402,8 +403,7 @@
           </span>
         </div>
         <button v-if="!account" @click="connect" :disabled="connecting">{{ connecting ? '连接中...' : '连接钱包' }}</button>
-        <button v-if="!account" class="secondary" @click="connectWC" :disabled="connecting">{{ connecting ? '连接中...' : 'WalletConnect' }}</button>
-        <button v-else class="secondary" @click="refreshMine">刷新资料</button>
+                <button v-else class="secondary" @click="refreshMine">刷新资料</button>
       </div>
     </header>
 
@@ -447,7 +447,7 @@
             <div class="flex" style="gap:6px;">
               <button class="secondary" :class="postFilter==='all' ? 'success' : 'secondary'" @click="setPostFilter('all')">全部</button>
               <button class="secondary" :class="postFilter==='mine' ? 'success' : 'secondary'" @click="setPostFilter('mine')" :disabled="!account" :title="!account ? '请先连接钱包' : '仅显示我的文章'">我的</button>
-              <div class="small muted">总数: {{ totalPosts }}</div>
+              <div class="small muted">总数: {{ postFilter==='mine' ? mineTotal : totalPosts }}</div>
             </div>
           </div>
         </div>
@@ -481,7 +481,7 @@
             <div class="mb12">
               <div>{{ previewText(p) }}</div>
               <div v-if="isLongContent(p)" class="small">
-                <button class="secondary" @click="openContent(p)">查看更多</button>
+                <span @click="openContent(p)" style="color: var(--primary); cursor: pointer;">查看更多</span>
               </div>
             </div>
 
@@ -599,11 +599,25 @@
           <div class="small muted">每次消耗 {{ drawCost }} 积分</div>
         </div>
         <div class="list mb16">
+          
         <div class="flex">
         <button class="warning" @click="draw" :disabled="!account || points < drawCost || loadingDraw" :title="!account ? '请先连接钱包' : (points < drawCost ? '积分不足' : '抽奖')">{{ loadingDraw ? '抽奖中...' : '抽一次' }}</button>
         <button class="success" @click="openRedeem" :disabled="!account || points < redeemCost || redeeming" :title="!account ? '请先连接钱包' : (points < redeemCost ? '积分不足' : '兑换 TT Token')">{{ redeeming ? '兑换中...' : '兑换TT' }}</button>
         <button class="secondary" @click="openDrawRecords">查看中奖记录</button>
         </div>
+        
+        <div class="small muted" v-if="ttTokenAddress">
+          TT 合约地址:
+          <span class="hover-copy">
+            <span class="mono">{{ short(ttTokenAddress) }}</span>
+            <span class="tooltip">
+              <div class="mono mb8" style="word-break: break-all;">{{ ttTokenAddress }}</div>
+              <button class="small-btn" @click="copy(ttTokenAddress)">复制</button>
+              <a v-if="explorerAddr(ttTokenAddress)" :href="explorerAddr(ttTokenAddress)" target="_blank" class="small">区块浏览器</a>
+            </span>
+          </span>
+        </div>
+
         <div class="small muted" v-if="account && (points < drawCost || points < redeemCost)">积分不足，需至少 {{ Math.min(drawCost, redeemCost) }} 分</div>
 
           <div class="small muted">奖品列表：</div>
@@ -626,75 +640,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/web3/1.10.4/web3.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/vue@3.4.38/dist/vue.global.prod.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
-  <script src="https://unpkg.com/@walletconnect/ethereum-provider@2.11.2/dist/umd/index.min.js"></script>
-  <script type="module">
-    (async () => {
-      try {
-        if (!window.WalletConnectEthereumProvider || !window.WalletConnectEthereumProvider.init) {
-          const sources = [
-            'https://cdn.jsdelivr.net/npm/@walletconnect/ethereum-provider@2.11.2/dist/index.umd.js',
-            'https://cdn.jsdelivr.net/npm/@walletconnect/ethereum-provider@2.11.2/dist/esm/index.js',
-            'https://unpkg.com/@walletconnect/ethereum-provider@2.11.2/dist/index.umd.js',
-            'https://unpkg.com/@walletconnect/ethereum-provider@2.11.2/dist/esm/index.js'
-          ];
-          for (const s of sources) {
-            try {
-              const mod = await import(s);
-              const exp = (mod && (mod.default || mod.EthereumProvider || mod)) || null;
-              if (exp && exp.init) { window.WalletConnectEthereumProvider = exp; break; }
-            } catch (_) { /* try next */ }
-          }
-        }
-      } catch (_) {}
-    })();
-  </script>
-  <script>
-    // Fallback loader for WalletConnect Ethereum Provider (multi-CDN)
-    window.__loadWc = async function() {
-      try {
-        if (window.WalletConnectEthereumProvider && window.WalletConnectEthereumProvider.init) return true;
-      } catch (_) {}
-      const urls = [
-        // jsDelivr variants
-        'https://cdn.jsdelivr.net/npm/@walletconnect/ethereum-provider@2.11.2/dist/umd/index.min.js',
-        'https://cdn.jsdelivr.net/npm/@walletconnect/ethereum-provider@2.11.2/dist/index.umd.js',
-        'https://cdn.jsdelivr.net/npm/@walletconnect/ethereum-provider@2.11.2/dist/index.min.js',
-        'https://cdn.jsdelivr.net/npm/@walletconnect/ethereum-provider@2.11.2/dist/index.js',
-        // fastly mirror
-        'https://fastly.jsdelivr.net/npm/@walletconnect/ethereum-provider@2.11.2/dist/umd/index.min.js',
-        'https://fastly.jsdelivr.net/npm/@walletconnect/ethereum-provider@2.11.2/dist/index.umd.js',
-        // gcore mirror
-        'https://gcore.jsdelivr.net/npm/@walletconnect/ethereum-provider@2.11.2/dist/umd/index.min.js',
-        'https://gcore.jsdelivr.net/npm/@walletconnect/ethereum-provider@2.11.2/dist/index.umd.js',
-        // unpkg variants
-        'https://unpkg.com/@walletconnect/ethereum-provider@2.11.2/dist/umd/index.min.js',
-        'https://unpkg.com/@walletconnect/ethereum-provider@2.11.2/dist/index.umd.js',
-        // China mirror
-        'https://cdn.npmmirror.com/npm/@walletconnect/ethereum-provider@2.11.2/dist/umd/index.min.js',
-        'https://cdn.npmmirror.com/npm/@walletconnect/ethereum-provider@2.11.2/dist/index.umd.js'
-      ];
-      for (const url of urls) {
-        try {
-          await new Promise((resolve, reject) => {
-            const s = document.createElement('script');
-            s.src = url;
-            s.async = true;
-            s.crossOrigin = 'anonymous';
-            s.onload = () => resolve();
-            s.onerror = () => reject(new Error('load failed'));
-            document.head.appendChild(s);
-          });
-          if (window.WalletConnectEthereumProvider && window.WalletConnectEthereumProvider.init) {
-            return true;
-          }
-        } catch (_) {
-          // try next url
-        }
-      }
-      return false;
-    };
-  </script>
-
+      
   <script>
     // 配置：合约地址与 ABI（从合约源码构建的最小 ABI，涵盖本页使用到的函数/事件）
     const BLOG_ADDRESS = '0x8039fec0287b01a685c851fb0Bac0Ac81694a483';
@@ -2292,9 +2238,7 @@
       blockExplorerUrls: ['https://megaexplorer.xyz']
     };
 
-    // WalletConnect v2 projectId (请到 https://dashboard.reown.com/创建并替换为你的项目ID)
-    const WALLETCONNECT_PROJECT_ID = '4f47f3d145f2ee6f7a553c2dc5a785f5';
-
+    
     const { createApp, ref, reactive, onMounted } = Vue;
 
     // Configurable event query constants
@@ -2453,6 +2397,7 @@
         const profile = reactive({ nickname: '', avatar: '', bio: '' });
         const points = ref(0);
         const nfts = ref([]);
+        const ttTokenAddress = ref('');
 
         const connecting = ref(false);
         const posting = ref(false);
@@ -2524,39 +2469,7 @@
         }
 
         // Generic EIP-1193 provider listeners (for injected or WalletConnect)
-        function registerProviderListenersGeneric(provider) {
-          if (!provider || hasProviderListeners.value) return;
-          provider.on && provider.on('accountsChanged', async (accs) => {
-            try {
-              account.value = accs && accs.length ? accs[0] : '';
-              if (account.value) {
-                await refreshMine();
-              } else {
-                profile.nickname = '';
-                profile.avatar = '';
-                profile.bio = '';
-                points.value = 0;
-              }
-              await loadAll();
-            } catch (e) { console.error('accountsChanged handler error', e); }
-          });
-          provider.on && provider.on('chainChanged', async () => {
-            try {
-              web3 = new Web3(provider);
-              contract = new web3.eth.Contract(BLOG_ABI, blogAddress.value);
-              networkId.value = await web3.eth.getChainId();
-              await loadAll();
-            } catch (e) { console.error('chainChanged handler error', e); }
-          });
-          provider.on && provider.on('disconnect', async () => {
-            try {
-              account.value = '';
-              await loadAll();
-            } catch (e) { console.error('disconnect handler error', e); }
-          });
-          hasProviderListeners.value = true;
-        }
-
+        
                 // Ensure read-only provider/contract for event queries (fallback to public RPC)
         function ensureReadOnly() {
           if (!web3) {
@@ -2622,6 +2535,10 @@
           const base = (Number(networkId.value) === 6342) ? 'https://megaexplorer.xyz' : '';
           return base ? base + '/tx/' + tx : '';
         }
+        function explorerAddr(addr) {
+          const base = (Number(networkId.value) === 6342) ? 'https://megaexplorer.xyz' : '';
+          return base && addr ? base + '/address/' + addr : '';
+        }
 
         async function connect() {
           try {
@@ -2685,57 +2602,7 @@
           }
         }
 
-        async function connectWC() {
-          try {
-            connecting.value = true;
-            let Wc = window.WalletConnectEthereumProvider || window.EthereumProvider || (window.WalletConnectProvider && window.WalletConnectProvider.EthereumProvider) || null;
-            if (!Wc || !Wc.init) {
-              const ok = window.__loadWc ? await window.__loadWc() : false;
-              Wc = window.WalletConnectEthereumProvider || window.EthereumProvider || (window.WalletConnectProvider && window.WalletConnectProvider.EthereumProvider) || null;
-              if (!ok || !Wc || !Wc.init) {
-                alert('未加载 WalletConnect 组件，请检查网络或脚本引用');
-                return;
-              }
-            }
-            const provider = await (Wc.init)({
-              projectId: WALLETCONNECT_PROJECT_ID,
-              chains: [TARGET_CHAIN_ID],
-              optionalChains: [TARGET_CHAIN_ID],
-              rpcMap: { [TARGET_CHAIN_ID]: TARGET_CHAIN_PARAMS.rpcUrls[0] },
-              showQrModal: true,
-              metadata: {
-                name: '区块链博客 DApp',
-                description: 'Vue + Web3.js 示例',
-                url: window.location.origin,
-                icons: ['https://raw.githubusercontent.com/WalletConnect/walletconnect-assets/master/Icon/Blue%20(Default)/Icon.svg']
-              }
-            });
-
-            await provider.connect();
-            await ensureCorrectChainAfterConnect(provider);
-
-            web3 = new Web3(provider);
-            const accs = await web3.eth.getAccounts();
-            account.value = accs && accs[0] ? accs[0] : '';
-            networkId.value = await web3.eth.getChainId();
-            contract = new web3.eth.Contract(BLOG_ABI, blogAddress.value);
-
-            await loadAll();
-            registerProviderListenersGeneric(provider);
-          } catch (e) {
-            console.error(e);
-            if (e && (e.code === 4001 || e.code === 'USER_REJECTED')) {
-              alert('用户取消了 WalletConnect 连接');
-            } else if (e && e.message) {
-              alert('WalletConnect 连接失败: ' + e.message);
-            } else {
-              alert('WalletConnect 连接失败');
-            }
-          } finally {
-            connecting.value = false;
-          }
-        }
-
+        
         async function refreshMine() {
           if (!contract) return;
           try {
@@ -2780,6 +2647,11 @@
 
             // draw cost is fixed at 50 in current contract; expose constant here
             drawCost.value = 50;
+            try {
+              ttTokenAddress.value = await contract.methods.ttToken().call();
+            } catch (e) {
+              ttTokenAddress.value = '';
+            }
 
             // my NFTs
             await loadNFTs();
@@ -2829,6 +2701,8 @@
 
         function setPostFilter(v) {
           postFilter.value = v;
+          if (v === 'mine') { currentPageMine.value = 1; } else { currentPageAll.value = 1; }
+          loadPosts();
           if (v === 'mine') {
             currentPageMine.value = 1;
             loadPosts();
@@ -3000,8 +2874,7 @@
           try {
             ensureReadOnly();
             rankTotal.value = Number(await contract.methods.getAuthorsTotal().call());
-            console.log(rankTotal.value);
-            currentRankPage.value = 1;
+                        currentRankPage.value = 1;
             await loadRankPage();
           } catch (e) { console.error('initRank error', e); }
         }
@@ -3017,8 +2890,7 @@
             let addrs = [], counts = [];
             if (limit > 0) {
               const res = await contract.methods.getAuthorsRank(offset, limit).call();
-              console.log(res);
-              if (Array.isArray(res) && res.length === 2) {
+                            if (Array.isArray(res) && res.length === 2) {
                 addrs = res[0]; counts = res[1];
               } else {
                 addrs = res.addrs || []; counts = res.counts || [];
@@ -3238,7 +3110,7 @@
         const newPost = reactive({ title: '', content: '', url: '' });
 
         // Content preview and modal for full content
-        const CONTENT_PREVIEW_LIMIT = 1000;
+        const CONTENT_PREVIEW_LIMIT = 300;
         const showContentModal = ref(false);
         const contentModal = reactive({ title: '', content: '' });
         function getFullContent(p) { return (p && (p.decodedContent ?? p.content)) || ''; }
@@ -3259,6 +3131,22 @@
         }
 
         onMounted(() => {
+          // Force text keyboard for all text inputs/textarea on mobile to avoid numeric-only keyboards
+          try {
+            document.querySelectorAll('input, textarea').forEach(el => {
+              if (el.tagName === 'INPUT') {
+                const t = el.getAttribute('type');
+                if (!t || t.toLowerCase() === 'text') {
+                  el.setAttribute('type', 'text');
+                }
+              }
+              el.setAttribute('inputmode', 'text');
+              el.setAttribute('autocapitalize', 'none');
+              el.setAttribute('autocomplete', 'off');
+              el.setAttribute('autocorrect', 'off');
+              el.setAttribute('spellcheck', 'false');
+            });
+          } catch (_) {}
           try {
             // Check if in MetaMask mobile browser
             const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
@@ -3301,8 +3189,7 @@
             
             if (isMobile && !isMetaMaskBrowser) {
               // Show a notice for mobile users not in MetaMask browser
-              console.info('移动设备检测：建议在 MetaMask 应用内浏览器中打开以获得最佳体验');
-            }
+                          }
 
             // If we were deep-linked into MetaMask with autoconnect flag, trigger connect once
             try {
@@ -3331,8 +3218,7 @@
                 connect();
               }
             } else {
-              console.warn('未检测到钱包扩展，使用公共 RPC 以只读模式加载');
-            }
+                          }
             loadAll();
           } catch (e) {
             console.warn('初始化失败', e);
@@ -3349,7 +3235,7 @@
           }
         }
 
-        return { account, connecting, connect, connectWC, refreshMine, networkDesc, short, blogAddress,
+        return { account, connecting, connect, refreshMine, networkDesc, short, blogAddress,
                  newPost, createPost, totalPosts, posts, comment, toggleComments, formatTime,
                  // create modal
                  showCreateModal, openCreate, closeCreate,
@@ -3379,7 +3265,7 @@
                  // tabs
                  activeTab, setActiveTab,
                  // redeem
-                 showRedeemModal, openRedeem, closeRedeem, confirmRedeem, redeeming, redeemCost, redeemAmountTT };
+                 showRedeemModal, openRedeem, closeRedeem, confirmRedeem, redeeming, redeemCost, redeemAmountTT, ttTokenAddress, explorerAddr, mineTotal };
       }
     }).mount('#app');
   </script>
