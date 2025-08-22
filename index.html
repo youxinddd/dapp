@@ -395,17 +395,113 @@
       <div class="flex" style="flex-wrap: wrap; justify-content: flex-end;">
         <div v-if="account" class="small" style="display: flex; align-items: center;">
           <span class="hover-copy">
-            <span class="mono">{{ short(account) }}</span>
+            <span class="mono" @click="goToExplorer(account)">{{ short(account) }}</span>
             <span class="tooltip">
               <div class="mono mb8" style="word-break: break-all;">{{ account }}</div>
               <button class="small-btn" @click="copy(account)">复制</button>
             </span>
           </span>
+          <span v-if="walletMode === 'local'" class="tag" style="margin-left: 8px;">本地</span>
+          <span v-else-if="walletMode === 'metamask'" class="tag" style="margin-left: 8px;">MetaMask</span>
         </div>
-        <button v-if="!account" @click="connect" :disabled="connecting">{{ connecting ? '连接中...' : '连接钱包' }}</button>
-                <button v-else class="secondary" @click="refreshMine">刷新资料</button>
+        <button v-if="!account" @click="openWalletModal" :disabled="connecting">{{ connecting ? '连接中...' : '连接钱包' }}</button>
+        <button v-else class="secondary" @click="openWalletSettings">钱包设置</button>
+        <button v-if="account" class="secondary" @click="refreshMine">刷新资料</button>
       </div>
     </header>
+
+    <!-- Wallet Connection Modal -->
+    <div v-if="showWalletModal" class="modal-overlay" @click.self="closeWalletModal">
+      <div class="modal">
+        <div class="between mb12">
+          <h3>选择钱包连接方式</h3>
+          <button class="secondary" @click="closeWalletModal">关闭</button>
+        </div>
+        <div class="list">
+          <button @click="connectMetaMask" :disabled="connecting" style="width: 100%;">
+            {{ connecting ? '连接中...' : '连接 MetaMask' }}
+          </button>
+          <button class="success" @click="useLocalWallet" style="width: 100%;">
+            使用本地钱包
+          </button>
+          <div class="small muted">
+            本地钱包会自动创建账户，私钥存储在浏览器中。请注意备份私钥。
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Wallet Settings Modal -->
+    <div v-if="showWalletSettings" class="modal-overlay" @click.self="closeWalletSettings">
+      <div class="modal">
+        <div class="between mb12">
+          <h3>钱包设置</h3>
+          <button class="secondary" @click="closeWalletSettings">关闭</button>
+        </div>
+        <div class="list">
+          <div>
+            <label>当前钱包模式</label>
+            <div class="flex">
+              <span class="tag">{{ walletMode === 'local' ? '本地钱包' : 'MetaMask' }}</span>
+              <button class="secondary" @click="switchWalletMode" style="margin-left: auto;">
+                切换到{{ walletMode === 'local' ? ' MetaMask' : '本地钱包' }}
+              </button>
+            </div>
+          </div>
+          <div>
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <div style="display: flex; align-items: center; gap: 5px;">
+                <label>资产</label> 
+                <a href="https://testnet.megaeth.com/#2" target="_blank" rel="noopener noreferrer">
+                  (领取空投)
+                </a>
+              </div>
+              <button style="display: flex; align-items: center; gap: 5px;" class="secondary" @click="refreshBalances">刷新余额</button>
+            </div>
+            <div class="card small" style="margin-bottom:8px;">
+              <div class="between"><div>ETH</div><div class="mono">{{ ethBalance }}</div></div>
+              <div class="between"><div>{{ ttSymbol }}</div><div class="mono">{{ ttBalance }}</div></div>
+            </div>
+          </div>
+          <div v-if="walletMode === 'local'">
+            <label>账户地址</label>
+            <div class="mono small" style="word-break: break-all;">{{ account }}</div>
+          </div>
+          
+          <div v-if="walletMode === 'local'">
+            <label>私钥（请妥善保管）</label>
+            <div class="flex">
+              <input type="password" v-model="privateKeyDisplay" readonly style="flex: 1;" />
+              <button class="secondary" @click="togglePrivateKey">
+                {{ showPrivateKey ? '隐藏' : '显示' }}
+              </button>
+              <button class="secondary" @click="copyPrivateKey">复制</button>
+            </div>
+            <div class="small muted">⚠️ 警告：私钥是您账户的唯一凭证，请勿泄露给他人</div>
+          </div>
+          
+          <div v-if="walletMode === 'local'">
+            <label>导入私钥</label>
+            <div class="flex">
+              <ime-input v-model="importPrivateKey" type="password" placeholder="输入私钥（0x开头）" style="flex: 1;"></ime-input>
+              <button class="warning" @click="importWallet">导入</button>
+            </div>
+          </div>
+          
+          <div v-if="walletMode === 'local'">
+            <button class="danger" @click="clearLocalWallet" style="width: 100%;">
+              清除本地钱包
+            </button>
+            <div class="small muted">清除后将无法恢复，请确保已备份私钥</div>
+          </div>
+          <div>
+            <button class="secondary" @click="disconnect" style="width: 100%;">
+              断开连接
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
 
     <!-- Redeem Modal -->
   <div v-if="showRedeemModal" class="modal-overlay" @click.self="closeRedeem">
@@ -642,157 +738,15 @@
   <script src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
       
   <script>
-    // 配置：合约地址与 ABI（从合约源码构建的最小 ABI，涵盖本页使用到的函数/事件）
     const BLOG_ADDRESS = '0x8039fec0287b01a685c851fb0Bac0Ac81694a483';
     const BLOG_ABI = [
     {
-      "inputs": [],
-      "stateMutability": "nonpayable",
-      "type": "constructor"
-    },
-    {
-      "inputs": [],
-      "name": "ContentTooLong",
-      "type": "error"
-    },
-    {
-      "inputs": [],
-      "name": "InvalidPostId",
-      "type": "error"
-    },
-    {
-      "inputs": [],
-      "name": "NotAuthor",
-      "type": "error"
-    },
-    {
       "anonymous": false,
       "inputs": [
-        {
-          "indexed": false,
-          "internalType": "address",
-          "name": "previousAdmin",
-          "type": "address"
-        },
-        {
-          "indexed": false,
-          "internalType": "address",
-          "name": "newAdmin",
-          "type": "address"
-        }
-      ],
-      "name": "AdminChanged",
-      "type": "event"
-    },
-    {
-      "anonymous": false,
-      "inputs": [
-        {
-          "indexed": true,
-          "internalType": "address",
-          "name": "owner",
-          "type": "address"
-        },
-        {
-          "indexed": true,
-          "internalType": "address",
-          "name": "approved",
-          "type": "address"
-        },
-        {
-          "indexed": true,
-          "internalType": "uint256",
-          "name": "tokenId",
-          "type": "uint256"
-        }
-      ],
-      "name": "Approval",
-      "type": "event"
-    },
-    {
-      "anonymous": false,
-      "inputs": [
-        {
-          "indexed": true,
-          "internalType": "address",
-          "name": "owner",
-          "type": "address"
-        },
-        {
-          "indexed": true,
-          "internalType": "address",
-          "name": "operator",
-          "type": "address"
-        },
-        {
-          "indexed": false,
-          "internalType": "bool",
-          "name": "approved",
-          "type": "bool"
-        }
-      ],
-      "name": "ApprovalForAll",
-      "type": "event"
-    },
-    {
-      "anonymous": false,
-      "inputs": [
-        {
-          "indexed": false,
-          "internalType": "uint256",
-          "name": "_fromTokenId",
-          "type": "uint256"
-        },
-        {
-          "indexed": false,
-          "internalType": "uint256",
-          "name": "_toTokenId",
-          "type": "uint256"
-        }
-      ],
-      "name": "BatchMetadataUpdate",
-      "type": "event"
-    },
-    {
-      "anonymous": false,
-      "inputs": [
-        {
-          "indexed": true,
-          "internalType": "address",
-          "name": "beacon",
-          "type": "address"
-        }
-      ],
-      "name": "BeaconUpgraded",
-      "type": "event"
-    },
-    {
-      "anonymous": false,
-      "inputs": [
-        {
-          "indexed": true,
-          "internalType": "address",
-          "name": "commenter",
-          "type": "address"
-        },
-        {
-          "indexed": true,
-          "internalType": "uint256",
-          "name": "postId",
-          "type": "uint256"
-        },
-        {
-          "indexed": false,
-          "internalType": "string",
-          "name": "content",
-          "type": "string"
-        },
-        {
-          "indexed": false,
-          "internalType": "uint256",
-          "name": "timestamp",
-          "type": "uint256"
-        }
+        { "indexed": true,  "internalType": "address", "name": "commenter", "type": "address" },
+        { "indexed": true,  "internalType": "uint256", "name": "postId",    "type": "uint256" },
+        { "indexed": false, "internalType": "string",  "name": "content",   "type": "string" },
+        { "indexed": false, "internalType": "uint256", "name": "timestamp", "type": "uint256" }
       ],
       "name": "Comment",
       "type": "event"
@@ -800,1442 +754,150 @@
     {
       "anonymous": false,
       "inputs": [
-        {
-          "indexed": false,
-          "internalType": "uint8",
-          "name": "version",
-          "type": "uint8"
-        }
-      ],
-      "name": "Initialized",
-      "type": "event"
-    },
-    {
-      "anonymous": false,
-      "inputs": [
-        {
-          "indexed": false,
-          "internalType": "uint256",
-          "name": "_tokenId",
-          "type": "uint256"
-        }
-      ],
-      "name": "MetadataUpdate",
-      "type": "event"
-    },
-    {
-      "anonymous": false,
-      "inputs": [
-        {
-          "indexed": true,
-          "internalType": "address",
-          "name": "user",
-          "type": "address"
-        },
-        {
-          "indexed": false,
-          "internalType": "uint256",
-          "name": "tokenId",
-          "type": "uint256"
-        },
-        {
-          "indexed": false,
-          "internalType": "string",
-          "name": "prizeName",
-          "type": "string"
-        },
-        {
-          "indexed": false,
-          "internalType": "string",
-          "name": "uri",
-          "type": "string"
-        },
-        {
-          "indexed": false,
-          "internalType": "uint256",
-          "name": "timestamp",
-          "type": "uint256"
-        }
+        { "indexed": true,  "internalType": "address", "name": "user",      "type": "address" },
+        { "indexed": false, "internalType": "uint256", "name": "tokenId",   "type": "uint256" },
+        { "indexed": false, "internalType": "string",  "name": "prizeName", "type": "string" },
+        { "indexed": false, "internalType": "string",  "name": "uri",       "type": "string" },
+        { "indexed": false, "internalType": "uint256", "name": "timestamp", "type": "uint256" }
       ],
       "name": "NFTDrawn",
       "type": "event"
     },
-    {
-      "anonymous": false,
-      "inputs": [
-        {
-          "indexed": true,
-          "internalType": "address",
-          "name": "previousOwner",
-          "type": "address"
-        },
-        {
-          "indexed": true,
-          "internalType": "address",
-          "name": "newOwner",
-          "type": "address"
-        }
+    { "inputs": [
+        { "internalType": "string",  "name": "title",      "type": "string" },
+        { "internalType": "string",  "name": "content",    "type": "string" },
+        { "internalType": "string",  "name": "url",        "type": "string" }
       ],
-      "name": "OwnershipTransferred",
-      "type": "event"
+      "name": "createPost", "outputs": [], "stateMutability": "nonpayable", "type": "function"
     },
-    {
-      "anonymous": false,
-      "inputs": [
-        {
-          "indexed": true,
-          "internalType": "uint256",
-          "name": "postId",
-          "type": "uint256"
-        },
-        {
-          "indexed": true,
-          "internalType": "address",
-          "name": "author",
-          "type": "address"
-        },
-        {
-          "indexed": false,
-          "internalType": "string",
-          "name": "title",
-          "type": "string"
-        }
+    { "inputs": [
+        { "internalType": "uint256", "name": "postId",     "type": "uint256" },
+        { "internalType": "string",  "name": "newTitle",   "type": "string" },
+        { "internalType": "string",  "name": "newContent", "type": "string" },
+        { "internalType": "string",  "name": "newUrl",     "type": "string" }
       ],
-      "name": "PostCreated",
-      "type": "event"
+      "name": "editPost", "outputs": [], "stateMutability": "nonpayable", "type": "function"
     },
-    {
-      "anonymous": false,
-      "inputs": [
-        {
-          "indexed": true,
-          "internalType": "uint256",
-          "name": "postId",
-          "type": "uint256"
-        },
-        {
-          "indexed": true,
-          "internalType": "address",
-          "name": "editor",
-          "type": "address"
-        }
+    { "inputs": [
+        { "internalType": "uint256", "name": "postId", "type": "uint256" },
+        { "internalType": "string",  "name": "content", "type": "string" }
       ],
-      "name": "PostEdited",
-      "type": "event"
+      "name": "comment", "outputs": [], "stateMutability": "nonpayable", "type": "function"
     },
-    {
-      "anonymous": false,
-      "inputs": [
-        {
-          "indexed": false,
-          "internalType": "string",
-          "name": "name",
-          "type": "string"
-        },
-        {
-          "indexed": false,
-          "internalType": "string",
-          "name": "uri",
-          "type": "string"
-        },
-        {
-          "indexed": false,
-          "internalType": "uint256",
-          "name": "weight",
-          "type": "uint256"
-        }
+    { "inputs": [
+        { "internalType": "string", "name": "nickname", "type": "string" },
+        { "internalType": "string", "name": "avatar",   "type": "string" },
+        { "internalType": "string", "name": "bio",      "type": "string" }
       ],
-      "name": "PrizeAdded",
-      "type": "event"
+      "name": "setProfile", "outputs": [], "stateMutability": "nonpayable", "type": "function"
     },
-    {
-      "anonymous": false,
-      "inputs": [
-        {
-          "indexed": true,
-          "internalType": "address",
-          "name": "user",
-          "type": "address"
-        },
-        {
-          "indexed": false,
-          "internalType": "string",
-          "name": "nickname",
-          "type": "string"
-        }
-      ],
-      "name": "ProfileUpdated",
-      "type": "event"
-    },
-    {
-      "anonymous": false,
-      "inputs": [
-        {
-          "indexed": true,
-          "internalType": "address",
-          "name": "user",
-          "type": "address"
-        },
-        {
-          "indexed": false,
-          "internalType": "uint256",
-          "name": "pointsCost",
-          "type": "uint256"
-        },
-        {
-          "indexed": false,
-          "internalType": "uint256",
-          "name": "amount",
-          "type": "uint256"
-        }
-      ],
-      "name": "TTRedeemed",
-      "type": "event"
-    },
-    {
-      "anonymous": false,
-      "inputs": [
-        {
-          "indexed": true,
-          "internalType": "address",
-          "name": "from",
-          "type": "address"
-        },
-        {
-          "indexed": true,
-          "internalType": "address",
-          "name": "to",
-          "type": "address"
-        },
-        {
-          "indexed": true,
-          "internalType": "uint256",
-          "name": "tokenId",
-          "type": "uint256"
-        }
-      ],
-      "name": "Transfer",
-      "type": "event"
-    },
-    {
-      "anonymous": false,
-      "inputs": [
-        {
-          "indexed": true,
-          "internalType": "address",
-          "name": "implementation",
-          "type": "address"
-        }
-      ],
-      "name": "Upgraded",
-      "type": "event"
-    },
-    {
-      "inputs": [],
-      "name": "DAILY_MAX_REDEEMS",
+    { "inputs": [], "name": "draw",      "outputs": [], "stateMutability": "nonpayable", "type": "function" },
+    { "inputs": [], "name": "redeemTT",  "outputs": [], "stateMutability": "nonpayable", "type": "function" },
+
+    { "inputs": [ { "internalType": "address", "name": "user", "type": "address" } ],
+      "name": "getUserProfile",
       "outputs": [
-        {
-          "internalType": "uint256",
-          "name": "",
-          "type": "uint256"
-        }
+        { "components": [
+            { "internalType": "string", "name": "nickname", "type": "string" },
+            { "internalType": "string", "name": "avatar",   "type": "string" },
+            { "internalType": "string", "name": "bio",      "type": "string" }
+          ],
+          "internalType": "struct BlogPlatform.Profile", "name": "", "type": "tuple" },
+        { "internalType": "uint256", "name": "point", "type": "uint256" }
       ],
-      "stateMutability": "view",
-      "type": "function"
+      "stateMutability": "view", "type": "function"
     },
-    {
-      "inputs": [],
-      "name": "MAX_COMMENT_LENGTH",
-      "outputs": [
-        {
-          "internalType": "uint256",
-          "name": "",
-          "type": "uint256"
-        }
+    { "inputs": [], "name": "getTotalPosts",
+      "outputs": [ { "internalType": "uint256", "name": "", "type": "uint256" } ],
+      "stateMutability": "view", "type": "function" },
+    { "inputs": [], "name": "getPrizeList",
+      "outputs": [ { "components": [
+            { "internalType": "string",  "name": "name",   "type": "string" },
+            { "internalType": "string",  "name": "uri",    "type": "string" },
+            { "internalType": "uint256", "name": "weight", "type": "uint256" }
+          ], "internalType": "struct BlogPlatform.Prize[]", "name": "", "type": "tuple[]" } ],
+      "stateMutability": "view", "type": "function" },
+    { "inputs": [ { "internalType": "address", "name": "user", "type": "address" } ],
+      "name": "getUserPostCount",
+      "outputs": [ { "internalType": "uint256", "name": "count", "type": "uint256" } ],
+      "stateMutability": "view", "type": "function" },
+    { "inputs": [
+        { "internalType": "address", "name": "user",   "type": "address" },
+        { "internalType": "uint256", "name": "offset", "type": "uint256" },
+        { "internalType": "uint256", "name": "limit",  "type": "uint256" }
       ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [],
-      "name": "REDEEM_POINTS_COST",
-      "outputs": [
-        {
-          "internalType": "uint256",
-          "name": "",
-          "type": "uint256"
-        }
+      "name": "getUserPosts",
+      "outputs": [ { "components": [
+            { "internalType": "uint256", "name": "id",            "type": "uint256" },
+            { "internalType": "string",  "name": "title",         "type": "string" },
+            { "internalType": "string",  "name": "content",       "type": "string" },
+            { "internalType": "string",  "name": "url",           "type": "string" },
+            { "internalType": "address", "name": "author",        "type": "address" },
+            { "internalType": "uint256", "name": "commentCount",  "type": "uint256" },
+            { "internalType": "uint256", "name": "commenterCount", "type": "uint256" },
+            { "internalType": "uint256", "name": "timestamp",     "type": "uint256" }
+          ], "internalType": "struct BlogPlatform.Post[]", "name": "result", "type": "tuple[]" } ],
+      "stateMutability": "view", "type": "function" },
+    { "inputs": [
+        { "internalType": "uint256", "name": "offset", "type": "uint256" },
+        { "internalType": "uint256", "name": "limit",  "type": "uint256" }
       ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "string",
-          "name": "name",
-          "type": "string"
-        },
-        {
-          "internalType": "string",
-          "name": "uri",
-          "type": "string"
-        },
-        {
-          "internalType": "uint256",
-          "name": "weight",
-          "type": "uint256"
-        }
-      ],
-      "name": "addPrize",
-      "outputs": [],
-      "stateMutability": "nonpayable",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "address",
-          "name": "to",
-          "type": "address"
-        },
-        {
-          "internalType": "uint256",
-          "name": "tokenId",
-          "type": "uint256"
-        }
-      ],
-      "name": "approve",
-      "outputs": [],
-      "stateMutability": "nonpayable",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "address",
-          "name": "owner",
-          "type": "address"
-        }
-      ],
-      "name": "balanceOf",
-      "outputs": [
-        {
-          "internalType": "uint256",
-          "name": "",
-          "type": "uint256"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [],
-      "name": "clearAllPosts",
-      "outputs": [],
-      "stateMutability": "nonpayable",
-      "type": "function"
-    },
-    {
-      "inputs": [],
-      "name": "clearPrizes",
-      "outputs": [],
-      "stateMutability": "nonpayable",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "uint256",
-          "name": "postId",
-          "type": "uint256"
-        },
-        {
-          "internalType": "string",
-          "name": "content",
-          "type": "string"
-        }
-      ],
-      "name": "comment",
-      "outputs": [],
-      "stateMutability": "nonpayable",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "string",
-          "name": "title",
-          "type": "string"
-        },
-        {
-          "internalType": "string",
-          "name": "content",
-          "type": "string"
-        },
-        {
-          "internalType": "string",
-          "name": "url",
-          "type": "string"
-        }
-      ],
-      "name": "createPost",
-      "outputs": [],
-      "stateMutability": "nonpayable",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "address",
-          "name": "",
-          "type": "address"
-        }
-      ],
-      "name": "dailyRedeemCount",
-      "outputs": [
-        {
-          "internalType": "uint256",
-          "name": "",
-          "type": "uint256"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "address",
-          "name": "",
-          "type": "address"
-        }
-      ],
-      "name": "dailyRedeemDay",
-      "outputs": [
-        {
-          "internalType": "uint256",
-          "name": "",
-          "type": "uint256"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [],
-      "name": "draw",
-      "outputs": [],
-      "stateMutability": "nonpayable",
-      "type": "function"
-    },
-    {
-      "inputs": [],
-      "name": "drawCost",
-      "outputs": [
-        {
-          "internalType": "uint256",
-          "name": "",
-          "type": "uint256"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "uint256",
-          "name": "postId",
-          "type": "uint256"
-        },
-        {
-          "internalType": "string",
-          "name": "newTitle",
-          "type": "string"
-        },
-        {
-          "internalType": "string",
-          "name": "newContent",
-          "type": "string"
-        },
-        {
-          "internalType": "string",
-          "name": "newUrl",
-          "type": "string"
-        }
-      ],
-      "name": "editPost",
-      "outputs": [],
-      "stateMutability": "nonpayable",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "uint256",
-          "name": "tokenId",
-          "type": "uint256"
-        }
-      ],
-      "name": "getApproved",
-      "outputs": [
-        {
-          "internalType": "address",
-          "name": "",
-          "type": "address"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "uint256",
-          "name": "offset",
-          "type": "uint256"
-        },
-        {
-          "internalType": "uint256",
-          "name": "limit",
-          "type": "uint256"
-        }
+      "name": "getPosts",
+      "outputs": [ { "components": [
+            { "internalType": "uint256", "name": "id",            "type": "uint256" },
+            { "internalType": "string",  "name": "title",         "type": "string" },
+            { "internalType": "string",  "name": "content",       "type": "string" },
+            { "internalType": "string",  "name": "url",           "type": "string" },
+            { "internalType": "address", "name": "author",        "type": "address" },
+            { "internalType": "uint256", "name": "commentCount",  "type": "uint256" },
+            { "internalType": "uint256", "name": "commenterCount", "type": "uint256" },
+            { "internalType": "uint256", "name": "timestamp",     "type": "uint256" }
+          ], "internalType": "struct BlogPlatform.Post[]", "name": "result", "type": "tuple[]" } ],
+      "stateMutability": "view", "type": "function" },
+    { "inputs": [], "name": "getAuthorsTotal",
+      "outputs": [ { "internalType": "uint256", "name": "", "type": "uint256" } ],
+      "stateMutability": "view", "type": "function" },
+    { "inputs": [
+        { "internalType": "uint256", "name": "offset", "type": "uint256" },
+        { "internalType": "uint256", "name": "limit",  "type": "uint256" }
       ],
       "name": "getAuthorsRank",
       "outputs": [
-        {
-          "internalType": "address[]",
-          "name": "addrs",
-          "type": "address[]"
-        },
-        {
-          "internalType": "uint256[]",
-          "name": "counts",
-          "type": "uint256[]"
-        }
+        { "internalType": "address[]", "name": "addrs",  "type": "address[]" },
+        { "internalType": "uint256[]", "name": "counts", "type": "uint256[]" }
       ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [],
-      "name": "getAuthorsTotal",
-      "outputs": [
-        {
-          "internalType": "uint256",
-          "name": "",
-          "type": "uint256"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "address",
-          "name": "owner",
-          "type": "address"
-        }
-      ],
+      "stateMutability": "view", "type": "function" },
+    { "inputs": [ { "internalType": "address", "name": "owner", "type": "address" } ],
       "name": "getOwnedTokens",
-      "outputs": [
-        {
-          "internalType": "uint256[]",
-          "name": "",
-          "type": "uint256[]"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "uint256",
-          "name": "postId",
-          "type": "uint256"
-        }
-      ],
-      "name": "getPost",
-      "outputs": [
-        {
-          "components": [
-            {
-              "internalType": "uint256",
-              "name": "id",
-              "type": "uint256"
-            },
-            {
-              "internalType": "string",
-              "name": "title",
-              "type": "string"
-            },
-            {
-              "internalType": "string",
-              "name": "content",
-              "type": "string"
-            },
-            {
-              "internalType": "string",
-              "name": "url",
-              "type": "string"
-            },
-            {
-              "internalType": "address",
-              "name": "author",
-              "type": "address"
-            },
-            {
-              "internalType": "uint256",
-              "name": "commentCount",
-              "type": "uint256"
-            },
-            {
-              "internalType": "uint256",
-              "name": "commenterCount",
-              "type": "uint256"
-            },
-            {
-              "internalType": "uint256",
-              "name": "timestamp",
-              "type": "uint256"
-            }
-          ],
-          "internalType": "struct BlogPlatform.Post",
-          "name": "",
-          "type": "tuple"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "uint256",
-          "name": "offset",
-          "type": "uint256"
-        },
-        {
-          "internalType": "uint256",
-          "name": "limit",
-          "type": "uint256"
-        }
-      ],
-      "name": "getPosts",
-      "outputs": [
-        {
-          "components": [
-            {
-              "internalType": "uint256",
-              "name": "id",
-              "type": "uint256"
-            },
-            {
-              "internalType": "string",
-              "name": "title",
-              "type": "string"
-            },
-            {
-              "internalType": "string",
-              "name": "content",
-              "type": "string"
-            },
-            {
-              "internalType": "string",
-              "name": "url",
-              "type": "string"
-            },
-            {
-              "internalType": "address",
-              "name": "author",
-              "type": "address"
-            },
-            {
-              "internalType": "uint256",
-              "name": "commentCount",
-              "type": "uint256"
-            },
-            {
-              "internalType": "uint256",
-              "name": "commenterCount",
-              "type": "uint256"
-            },
-            {
-              "internalType": "uint256",
-              "name": "timestamp",
-              "type": "uint256"
-            }
-          ],
-          "internalType": "struct BlogPlatform.Post[]",
-          "name": "result",
-          "type": "tuple[]"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [],
-      "name": "getPrizeList",
-      "outputs": [
-        {
-          "components": [
-            {
-              "internalType": "string",
-              "name": "name",
-              "type": "string"
-            },
-            {
-              "internalType": "string",
-              "name": "uri",
-              "type": "string"
-            },
-            {
-              "internalType": "uint256",
-              "name": "weight",
-              "type": "uint256"
-            }
-          ],
-          "internalType": "struct BlogPlatform.Prize[]",
-          "name": "",
-          "type": "tuple[]"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [],
-      "name": "getTotalPosts",
-      "outputs": [
-        {
-          "internalType": "uint256",
-          "name": "",
-          "type": "uint256"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "address",
-          "name": "user",
-          "type": "address"
-        }
-      ],
-      "name": "getUserPostCount",
-      "outputs": [
-        {
-          "internalType": "uint256",
-          "name": "count",
-          "type": "uint256"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "address",
-          "name": "user",
-          "type": "address"
-        },
-        {
-          "internalType": "uint256",
-          "name": "offset",
-          "type": "uint256"
-        },
-        {
-          "internalType": "uint256",
-          "name": "limit",
-          "type": "uint256"
-        }
-      ],
-      "name": "getUserPosts",
-      "outputs": [
-        {
-          "components": [
-            {
-              "internalType": "uint256",
-              "name": "id",
-              "type": "uint256"
-            },
-            {
-              "internalType": "string",
-              "name": "title",
-              "type": "string"
-            },
-            {
-              "internalType": "string",
-              "name": "content",
-              "type": "string"
-            },
-            {
-              "internalType": "string",
-              "name": "url",
-              "type": "string"
-            },
-            {
-              "internalType": "address",
-              "name": "author",
-              "type": "address"
-            },
-            {
-              "internalType": "uint256",
-              "name": "commentCount",
-              "type": "uint256"
-            },
-            {
-              "internalType": "uint256",
-              "name": "commenterCount",
-              "type": "uint256"
-            },
-            {
-              "internalType": "uint256",
-              "name": "timestamp",
-              "type": "uint256"
-            }
-          ],
-          "internalType": "struct BlogPlatform.Post[]",
-          "name": "result",
-          "type": "tuple[]"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "address",
-          "name": "user",
-          "type": "address"
-        }
-      ],
-      "name": "getUserProfile",
-      "outputs": [
-        {
-          "components": [
-            {
-              "internalType": "string",
-              "name": "nickname",
-              "type": "string"
-            },
-            {
-              "internalType": "string",
-              "name": "avatar",
-              "type": "string"
-            },
-            {
-              "internalType": "string",
-              "name": "bio",
-              "type": "string"
-            }
-          ],
-          "internalType": "struct BlogPlatform.Profile",
-          "name": "",
-          "type": "tuple"
-        },
-        {
-          "internalType": "uint256",
-          "name": "point",
-          "type": "uint256"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "uint256",
-          "name": "",
-          "type": "uint256"
-        },
-        {
-          "internalType": "address",
-          "name": "",
-          "type": "address"
-        }
-      ],
-      "name": "hasCommented",
-      "outputs": [
-        {
-          "internalType": "bool",
-          "name": "",
-          "type": "bool"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [],
-      "name": "initialize",
-      "outputs": [],
-      "stateMutability": "nonpayable",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "address",
-          "name": "owner",
-          "type": "address"
-        },
-        {
-          "internalType": "address",
-          "name": "operator",
-          "type": "address"
-        }
-      ],
-      "name": "isApprovedForAll",
-      "outputs": [
-        {
-          "internalType": "bool",
-          "name": "",
-          "type": "bool"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "address",
-          "name": "",
-          "type": "address"
-        }
-      ],
-      "name": "isAuthor",
-      "outputs": [
-        {
-          "internalType": "bool",
-          "name": "",
-          "type": "bool"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [],
-      "name": "name",
-      "outputs": [
-        {
-          "internalType": "string",
-          "name": "",
-          "type": "string"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [],
-      "name": "owner",
-      "outputs": [
-        {
-          "internalType": "address",
-          "name": "",
-          "type": "address"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "uint256",
-          "name": "tokenId",
-          "type": "uint256"
-        }
-      ],
-      "name": "ownerOf",
-      "outputs": [
-        {
-          "internalType": "address",
-          "name": "",
-          "type": "address"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "address",
-          "name": "",
-          "type": "address"
-        }
-      ],
-      "name": "points",
-      "outputs": [
-        {
-          "internalType": "uint256",
-          "name": "",
-          "type": "uint256"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [],
-      "name": "postCount",
-      "outputs": [
-        {
-          "internalType": "uint256",
-          "name": "",
-          "type": "uint256"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "uint256",
-          "name": "",
-          "type": "uint256"
-        }
-      ],
-      "name": "posts",
-      "outputs": [
-        {
-          "internalType": "uint256",
-          "name": "id",
-          "type": "uint256"
-        },
-        {
-          "internalType": "string",
-          "name": "title",
-          "type": "string"
-        },
-        {
-          "internalType": "string",
-          "name": "content",
-          "type": "string"
-        },
-        {
-          "internalType": "string",
-          "name": "url",
-          "type": "string"
-        },
-        {
-          "internalType": "address",
-          "name": "author",
-          "type": "address"
-        },
-        {
-          "internalType": "uint256",
-          "name": "commentCount",
-          "type": "uint256"
-        },
-        {
-          "internalType": "uint256",
-          "name": "commenterCount",
-          "type": "uint256"
-        },
-        {
-          "internalType": "uint256",
-          "name": "timestamp",
-          "type": "uint256"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "uint256",
-          "name": "",
-          "type": "uint256"
-        }
-      ],
-      "name": "prizes",
-      "outputs": [
-        {
-          "internalType": "string",
-          "name": "name",
-          "type": "string"
-        },
-        {
-          "internalType": "string",
-          "name": "uri",
-          "type": "string"
-        },
-        {
-          "internalType": "uint256",
-          "name": "weight",
-          "type": "uint256"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "address",
-          "name": "",
-          "type": "address"
-        }
-      ],
-      "name": "profiles",
-      "outputs": [
-        {
-          "internalType": "string",
-          "name": "nickname",
-          "type": "string"
-        },
-        {
-          "internalType": "string",
-          "name": "avatar",
-          "type": "string"
-        },
-        {
-          "internalType": "string",
-          "name": "bio",
-          "type": "string"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [],
-      "name": "proxiableUUID",
-      "outputs": [
-        {
-          "internalType": "bytes32",
-          "name": "",
-          "type": "bytes32"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [],
-      "name": "redeemTT",
-      "outputs": [],
-      "stateMutability": "nonpayable",
-      "type": "function"
-    },
-    {
-      "inputs": [],
-      "name": "renounceOwnership",
-      "outputs": [],
-      "stateMutability": "nonpayable",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "address",
-          "name": "from",
-          "type": "address"
-        },
-        {
-          "internalType": "address",
-          "name": "to",
-          "type": "address"
-        },
-        {
-          "internalType": "uint256",
-          "name": "tokenId",
-          "type": "uint256"
-        }
-      ],
-      "name": "safeTransferFrom",
-      "outputs": [],
-      "stateMutability": "nonpayable",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "address",
-          "name": "from",
-          "type": "address"
-        },
-        {
-          "internalType": "address",
-          "name": "to",
-          "type": "address"
-        },
-        {
-          "internalType": "uint256",
-          "name": "tokenId",
-          "type": "uint256"
-        },
-        {
-          "internalType": "bytes",
-          "name": "data",
-          "type": "bytes"
-        }
-      ],
-      "name": "safeTransferFrom",
-      "outputs": [],
-      "stateMutability": "nonpayable",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "address",
-          "name": "operator",
-          "type": "address"
-        },
-        {
-          "internalType": "bool",
-          "name": "approved",
-          "type": "bool"
-        }
-      ],
-      "name": "setApprovalForAll",
-      "outputs": [],
-      "stateMutability": "nonpayable",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "string",
-          "name": "nickname",
-          "type": "string"
-        },
-        {
-          "internalType": "string",
-          "name": "avatar",
-          "type": "string"
-        },
-        {
-          "internalType": "string",
-          "name": "bio",
-          "type": "string"
-        }
-      ],
-      "name": "setProfile",
-      "outputs": [],
-      "stateMutability": "nonpayable",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "address",
-          "name": "token",
-          "type": "address"
-        },
-        {
-          "internalType": "uint8",
-          "name": "decimals_",
-          "type": "uint8"
-        }
-      ],
-      "name": "setTTToken",
-      "outputs": [],
-      "stateMutability": "nonpayable",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "bytes4",
-          "name": "interfaceId",
-          "type": "bytes4"
-        }
-      ],
-      "name": "supportsInterface",
-      "outputs": [
-        {
-          "internalType": "bool",
-          "name": "",
-          "type": "bool"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [],
-      "name": "symbol",
-      "outputs": [
-        {
-          "internalType": "string",
-          "name": "",
-          "type": "string"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [],
-      "name": "tokenIdCounter",
-      "outputs": [
-        {
-          "internalType": "uint256",
-          "name": "",
-          "type": "uint256"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "uint256",
-          "name": "tokenId",
-          "type": "uint256"
-        }
-      ],
+      "outputs": [ { "internalType": "uint256[]", "name": "", "type": "uint256[]" } ],
+      "stateMutability": "view", "type": "function" },
+    { "inputs": [ { "internalType": "uint256", "name": "tokenId", "type": "uint256" } ],
       "name": "tokenURI",
-      "outputs": [
-        {
-          "internalType": "string",
-          "name": "",
-          "type": "string"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "address",
-          "name": "from",
-          "type": "address"
-        },
-        {
-          "internalType": "address",
-          "name": "to",
-          "type": "address"
-        },
-        {
-          "internalType": "uint256",
-          "name": "tokenId",
-          "type": "uint256"
-        }
-      ],
-      "name": "transferFrom",
-      "outputs": [],
-      "stateMutability": "nonpayable",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "address",
-          "name": "newOwner",
-          "type": "address"
-        }
-      ],
-      "name": "transferOwnership",
-      "outputs": [],
-      "stateMutability": "nonpayable",
-      "type": "function"
-    },
-    {
-      "inputs": [],
-      "name": "ttAmountPerRedeem",
-      "outputs": [
-        {
-          "internalType": "uint256",
-          "name": "",
-          "type": "uint256"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [],
-      "name": "ttDecimals",
-      "outputs": [
-        {
-          "internalType": "uint8",
-          "name": "",
-          "type": "uint8"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [],
-      "name": "ttToken",
-      "outputs": [
-        {
-          "internalType": "contract IERC20Upgradeable",
-          "name": "",
-          "type": "address"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "address",
-          "name": "newImplementation",
-          "type": "address"
-        }
-      ],
-      "name": "upgradeTo",
-      "outputs": [],
-      "stateMutability": "nonpayable",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "address",
-          "name": "newImplementation",
-          "type": "address"
-        },
-        {
-          "internalType": "bytes",
-          "name": "data",
-          "type": "bytes"
-        }
-      ],
-      "name": "upgradeToAndCall",
-      "outputs": [],
-      "stateMutability": "payable",
-      "type": "function"
-    },
-    {
-      "stateMutability": "payable",
-      "type": "receive"
-    }
+      "outputs": [ { "internalType": "string", "name": "", "type": "string" } ],
+      "stateMutability": "view", "type": "function" },
+    { "inputs": [], "name": "ttToken",
+      "outputs": [ { "internalType": "contract IERC20Upgradeable", "name": "", "type": "address" } ],
+      "stateMutability": "view", "type": "function" }
+  ];
+
+  // Minimal ERC20 ABI for balance/symbol/decimals queries
+  const ERC20_ABI = [
+    { "constant": true, "inputs": [{"name":"account","type":"address"}], "name": "balanceOf", "outputs": [{"name":"","type":"uint256"}], "type": "function", "stateMutability":"view" },
+    { "constant": true, "inputs": [], "name": "decimals", "outputs": [{"name":"","type":"uint8"}], "type": "function", "stateMutability":"view" },
+    { "constant": true, "inputs": [], "name": "symbol",   "outputs": [{"name":"","type":"string"}],  "type": "function", "stateMutability":"view" }
   ];
 
     // Target chain configuration (ensure wallet is on correct network)
+    const CHAIN_RPC = 'https://carrot.megaeth.com/rpc';
+    const CHAIN_explorer = 'https://megaexplorer.xyz';
     const TARGET_CHAIN_ID = 6342;
     const TARGET_CHAIN_HEX = '0x18C6'; // 6342 in hex
     const TARGET_CHAIN_PARAMS = {
       chainId: TARGET_CHAIN_HEX,
       chainName: 'MegaETH',
       nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
-      rpcUrls: ['https://carrot.megaeth.com/rpc'],
-      blockExplorerUrls: ['https://megaexplorer.xyz']
+      rpcUrls: [CHAIN_RPC],
+      blockExplorerUrls: [CHAIN_explorer]
     };
 
     
@@ -2374,10 +1036,15 @@
 
     // Calculate offset/limit for reverse-ordered pagination (newest first)
     function calcReversePagination(total, page, size) {
-      const pages = Math.max(1, Math.ceil(Number(total || 0) / size));
-      const p = Math.min(page, pages);
-      const start = Math.max(0, Number(total || 0) - p * size);
-      const limit = Math.max(0, Math.min(size, Number(total || 0) - start));
+      total = Number(total || 0);
+      size = Number(size || 0);
+      if (size <= 0) return { offset: 0, limit: 0 };
+      const pages = Math.max(1, Math.ceil(total / size));
+      const p = Math.min(Math.max(1, Number(page || 1)), pages);
+      // end is exclusive index for this page in ascending order
+      const end = total - (p - 1) * size;
+      const start = Math.max(0, end - size);
+      const limit = Math.max(0, end - start);
       return { offset: start, limit };
     }
 
@@ -2454,6 +1121,9 @@
         const points = ref(0);
         const nfts = ref([]);
         const ttTokenAddress = ref('');
+        const ethBalance = ref('0');
+        const ttBalance = ref('0');
+        const ttSymbol = ref('TT');
 
         const connecting = ref(false);
         const posting = ref(false);
@@ -2499,9 +1169,200 @@
         const activeTab = ref('posts');
         function setActiveTab(t) { activeTab.value = t; }
 
+        // Wallet management
+        const walletMode = ref(''); // 'local' or 'metamask'
+        const showWalletModal = ref(false);
+        const showWalletSettings = ref(false);
+        const localWallet = ref(null);
+        const privateKeyDisplay = ref('');
+        const showPrivateKey = ref(false);
+        const importPrivateKey = ref('');
+
         let web3 = null;
         let contract = null;
         const hasProviderListeners = ref(false);
+
+        // Local wallet management functions
+        function generateLocalWallet() {
+          const wallet = web3.eth.accounts.create();
+          localStorage.setItem('localWallet', JSON.stringify({
+            address: wallet.address,
+            privateKey: wallet.privateKey
+          }));
+          return wallet;
+        }
+
+        function loadLocalWallet() {
+          const stored = localStorage.getItem('localWallet');
+          if (stored) {
+            try {
+              const parsed = JSON.parse(stored);
+              const wallet = web3.eth.accounts.privateKeyToAccount(parsed.privateKey);
+              web3.eth.accounts.wallet.add(wallet);
+              return wallet;
+            } catch (e) {
+              console.error('Failed to load local wallet', e);
+              localStorage.removeItem('localWallet');
+            }
+          }
+          return null;
+        }
+
+        function clearLocalWallet() {
+          if (confirm('确定要清除本地钱包吗？此操作不可恢��！')) {
+            localStorage.removeItem('localWallet');
+            localWallet.value = null;
+            account.value = '';
+            walletMode.value = '';
+            showWalletSettings.value = false;
+            loadAll();
+          }
+        }
+
+        async function importWallet() {
+          if (!importPrivateKey.value) return alert('请输入私钥');
+          try {
+            const pk = importPrivateKey.value.trim();
+            if (!pk.startsWith('0x')) {
+              return alert('私钥格式错误，应以0x开头');
+            }
+            const wallet = web3.eth.accounts.privateKeyToAccount(pk);
+            localStorage.setItem('localWallet', JSON.stringify({
+              address: wallet.address,
+              privateKey: wallet.privateKey
+            }));
+            web3.eth.accounts.wallet.clear();
+            web3.eth.accounts.wallet.add(wallet);
+            localWallet.value = wallet;
+            account.value = wallet.address;
+            walletMode.value = 'local';
+            importPrivateKey.value = '';
+            alert('导入成功');
+            await loadAll();
+          } catch (e) {
+            console.error(e);
+            alert('导入失败：' + (e?.message || e));
+          }
+        }
+
+        function togglePrivateKey() {
+          showPrivateKey.value = !showPrivateKey.value;
+          if (showPrivateKey.value && localWallet.value) {
+            privateKeyDisplay.value = localWallet.value.privateKey;
+          } else {
+            privateKeyDisplay.value = '••••••••••••••••••••••••••••••••';
+          }
+        }
+
+        function copyPrivateKey() {
+          if (localWallet.value) {
+            copy(localWallet.value.privateKey);
+          }
+        }
+
+        function openWalletModal() {
+          showWalletModal.value = true;
+        }
+
+        function closeWalletModal() {
+          showWalletModal.value = false;
+        }
+
+        async function openWalletSettings() {
+          showWalletSettings.value = true;
+          if (walletMode.value === 'local' && localWallet.value) {
+            privateKeyDisplay.value = '••••••••••••••••••••••••••••••••';
+            showPrivateKey.value = false;
+          }
+          try { await refreshBalances(); } catch (e) {}
+        }
+
+        function closeWalletSettings() {
+          showWalletSettings.value = false;
+          showPrivateKey.value = false;
+          privateKeyDisplay.value = '';
+          importPrivateKey.value = '';
+        }
+
+        async function useLocalWallet() {
+          try {
+            // Initialize web3 with RPC
+            if (!web3) {
+              web3 = new Web3(CHAIN_RPC);
+            }
+            
+            // Load or create local wallet
+            let wallet = loadLocalWallet();
+            if (!wallet) {
+              wallet = generateLocalWallet();
+              alert('已创建新的本地钱包，请在钱包设置中备份私钥');
+            }
+            
+            localWallet.value = wallet;
+            account.value = wallet.address;
+            walletMode.value = 'local';
+            networkId.value = await web3.eth.getChainId();
+            contract = new web3.eth.Contract(BLOG_ABI, blogAddress.value);
+            
+            showWalletModal.value = false;
+            await loadAll();
+          } catch (e) {
+            console.error(e);
+            alert('创建本地钱包失败: ' + (e?.message || e));
+          }
+        }
+
+        async function connectMetaMask() {
+          walletMode.value = 'metamask';
+          showWalletModal.value = false;
+          await connect();
+        }
+
+        async function switchWalletMode() {
+          if (walletMode.value === 'local') {
+            // Switch to MetaMask
+            await connectMetaMask();
+          } else {
+            // Switch to local wallet
+            await useLocalWallet();
+          }
+          closeWalletSettings();
+        }
+
+        function disconnect() {
+          account.value = '';
+          walletMode.value = '';
+          localWallet.value = null;
+          showWalletSettings.value = false;
+          if (web3 && web3.eth.accounts.wallet) {
+            web3.eth.accounts.wallet.clear();
+          }
+          loadAll();
+        }
+
+        // Modified send transaction function to handle both wallet modes
+        async function sendTransaction(method, from) {
+          if (walletMode.value === 'local') {
+            // For local wallet, sign and send raw transaction
+            let currentNonce = await web3.eth.getTransactionCount(from, 'pending');
+            const tx = {
+              from: from,
+              to: contract.options.address,
+              data: method.encodeABI(),
+              gas: await method.estimateGas({ from }),
+              gasPrice: web3.utils.toWei('0.005', 'gwei'),
+              nonce: currentNonce
+            };
+            currentNonce++;
+            console.log(tx);
+            const signedTx = await web3.eth.accounts.signTransaction(tx, localWallet.value.privateKey);
+            const receipt = await web3.eth.sendSignedTransaction(signedTx.rawTransaction);
+            return receipt;
+          } else {
+            // For MetaMask, use regular send
+            return await method.send({ from });
+          }
+        }
 
         // Ensure wallet is on the target chain (adds the chain if missing)
         async function ensureCorrectChainAfterConnect(provider = (typeof window !== 'undefined' ? window.ethereum : null)) {
@@ -2529,7 +1390,7 @@
                 // Ensure read-only provider/contract for event queries (fallback to public RPC)
         function ensureReadOnly() {
           if (!web3) {
-            const provider = window.ethereum ? window.ethereum : 'https://carrot.megaeth.com/rpc';
+            const provider = window.ethereum ? window.ethereum : CHAIN_RPC;
             web3 = new Web3(provider);
           }
           if (!contract) {
@@ -2588,12 +1449,53 @@
         };
         const networkDesc = Vue.computed(() => networkId.value ? `ChainId: ${networkId.value}` : '未连接');
         function explorerTx(tx) {
-          const base = (Number(networkId.value) === 6342) ? 'https://megaexplorer.xyz' : '';
+          const base = (Number(networkId.value) === 6342) ? CHAIN_explorer : '';
           return base ? base + '/tx/' + tx : '';
         }
         function explorerAddr(addr) {
-          const base = (Number(networkId.value) === 6342) ? 'https://megaexplorer.xyz' : '';
+          const base = (Number(networkId.value) === 6342) ? CHAIN_explorer : '';
           return base && addr ? base + '/address/' + addr : '';
+        }
+
+        function formatTokenAmount(raw, decimals = 18, fracDigits = 6) {
+          if (!raw && raw !== 0) return '0';
+          let s = String(raw);
+          if (!/^[0-9]+$/.test(s)) {
+            try { s = BigInt(s).toString(); } catch { return '0'; }
+          }
+          decimals = Number(decimals || 0);
+          if (decimals <= 0) return s;
+          const padded = s.padStart(decimals + 1, '0');
+          const intPart = padded.slice(0, -decimals);
+          let fracPart = padded.slice(-decimals);
+          if (fracDigits >= 0) fracPart = fracPart.slice(0, fracDigits);
+          fracPart = fracPart.replace(/0+$/, '');
+          return fracPart ? intPart + '.' + fracPart : intPart;
+        }
+
+        async function refreshBalances() {
+          try {
+            if (!web3 || !account.value) { ethBalance.value = '0'; ttBalance.value = '0'; return; }
+            // ETH
+            const wei = await web3.eth.getBalance(account.value);
+            const eth = web3.utils.fromWei(wei, 'ether');
+            const parts = String(eth).split('.');
+            ethBalance.value = parts.length === 1 ? parts[0] : (parts[0] + '.' + parts[1].slice(0,6)).replace(/\.?0+$/, '');
+            // TT token
+            ttBalance.value = '0';
+            if (ttTokenAddress.value) {
+              const erc20 = new web3.eth.Contract(ERC20_ABI, ttTokenAddress.value);
+              const [bal, dec, sym] = await Promise.all([
+                erc20.methods.balanceOf(account.value).call(),
+                erc20.methods.decimals().call().catch(() => 18),
+                erc20.methods.symbol().call().catch(() => 'TT')
+              ]);
+              ttSymbol.value = sym || 'TT';
+              ttBalance.value = formatTokenAmount(bal, Number(dec || 18), 6);
+            }
+          } catch (e) {
+            console.warn('refreshBalances failed', e);
+          }
         }
 
         async function connect() {
@@ -2773,7 +1675,8 @@
           if (!newPost.title || !newPost.content) return alert('标题与内容不能为空');
           try {
             posting.value = true;
-            await contract.methods.createPost(newPost.title, encodeToBase64Gzip(newPost.content || ''), newPost.url || '').send({ from: account.value });
+            const method = contract.methods.createPost(newPost.title, encodeToBase64Gzip(newPost.content || ''), newPost.url || '');
+            await sendTransaction(method, account.value);
             newPost.title = ''; newPost.content = ''; newPost.url = '';
             showCreateModal.value = false;
             await loadAll();
@@ -2797,7 +1700,8 @@
           if (!p._comment) return;
           try {
             p._commenting = true;
-            await contract.methods.comment(p.id, p._comment).send({ from: account.value });
+            const method = contract.methods.comment(p.id, p._comment);
+            await sendTransaction(method, account.value);
             p._comment = '';
             await loadComments(p);
           } catch (e) {
@@ -2872,7 +1776,8 @@
           if (!account.value) return alert('请先连接钱包');
           try {
             savingProfile.value = true;
-            await contract.methods.setProfile(editProfile.nickname||'', editProfile.avatar||'', editProfile.bio||'').send({ from: account.value });
+            const method = contract.methods.setProfile(editProfile.nickname||'', editProfile.avatar||'', editProfile.bio||'');
+            await sendTransaction(method, account.value);
             profile.nickname = editProfile.nickname || '';
             profile.avatar = editProfile.avatar || '';
             profile.bio = editProfile.bio || '';
@@ -2890,7 +1795,8 @@
           if (points.value < drawCost.value) return alert('积分不足，无法抽奖');
           try {
             loadingDraw.value = true;
-            await contract.methods.draw().send({ from: account.value });
+            const method = contract.methods.draw();
+            await sendTransaction(method, account.value);
             await loadAll();
             alert('抽奖完成，检查 NFT 列表');
           } catch (e) {
@@ -2910,7 +1816,8 @@
           if (points.value < redeemCost.value) return alert('积分不足');
           try {
             redeeming.value = true;
-            await contract.methods.redeemTT().send({ from: account.value });
+            const method = contract.methods.redeemTT();
+            await sendTransaction(method, account.value);
             showRedeemModal.value = false;
             await loadAll();
             alert('兑换成功，已获得 ' + redeemAmountTT.value + ' TT');
@@ -3135,7 +2042,8 @@
           if (editingPost.id === null || editingPost.id === undefined) return alert('无效的文章');
           try {
             editSubmitting.value = true;
-            await contract.methods.editPost(editingPost.id, editingPost.title || '', encodeToBase64Gzip(editingPost.content || ''), editingPost.url || '').send({ from: account.value });
+            const method = contract.methods.editPost(editingPost.id, editingPost.title || '', encodeToBase64Gzip(editingPost.content || ''), editingPost.url || '');
+            await sendTransaction(method, account.value);
             showEditModal.value = false;
             await loadAll();
             alert('已保存');
@@ -3186,7 +2094,7 @@
           contentModal.content = '';
         }
 
-        onMounted(() => {
+        onMounted(async () => {
           // Force text keyboard for all text inputs/textarea on mobile to avoid numeric-only keyboards
           try {
             document.querySelectorAll('input, textarea').forEach(el => {
@@ -3242,10 +2150,6 @@
                 } catch (_) {}
               }
             } catch (_) {}
-            
-            if (isMobile && !isMetaMaskBrowser) {
-              // Show a notice for mobile users not in MetaMask browser
-                          }
 
             // If we were deep-linked into MetaMask with autoconnect flag, trigger connect once
             try {
@@ -3265,16 +2169,30 @@
             
             // Always init a read-only provider (wallet or public RPC)
             ensureReadOnly();
-            web3.eth.getChainId().then(id => networkId.value = id).catch(()=>{});
-            if (window.ethereum) {
-              registerProviderListeners();
-              
-              // Auto-connect if previously connected (for better mobile UX)
-              if (window.ethereum.selectedAddress) {
-                connect();
+            
+            // Check for existing local wallet
+            const stored = localStorage.getItem('localWallet');
+            if (stored) {
+              try {
+                // Auto-connect local wallet
+                await useLocalWallet();
+              } catch (e) {
+                console.error('Failed to auto-connect local wallet', e);
               }
             } else {
-                          }
+              // Check for MetaMask
+              web3.eth.getChainId().then(id => networkId.value = id).catch(()=>{});
+              if (window.ethereum) {
+                registerProviderListeners();
+                
+                // Auto-connect if previously connected (for better mobile UX)
+                if (window.ethereum.selectedAddress) {
+                  walletMode.value = 'metamask';
+                  connect();
+                }
+              }
+            }
+            
             loadAll();
           } catch (e) {
             console.warn('初始化失败', e);
@@ -3290,8 +2208,17 @@
             window.prompt('复制以下内容到剪贴板:', text);
           }
         }
+        function goToExplorer(addr) {
+          window.open(`${CHAIN_explorer}/address/${addr}`, "_blank");
+        }
 
         return { account, connecting, connect, refreshMine, networkDesc, short, blogAddress,
+                 // Wallet management
+                 walletMode, showWalletModal, showWalletSettings, localWallet,
+                 privateKeyDisplay, showPrivateKey, importPrivateKey,
+                 openWalletModal, closeWalletModal, openWalletSettings, closeWalletSettings,
+                 useLocalWallet, connectMetaMask, switchWalletMode, disconnect,
+                 clearLocalWallet, importWallet, togglePrivateKey, copyPrivateKey,
                  newPost, createPost, totalPosts, posts, comment, toggleComments, formatTime,
                  // create modal
                  showCreateModal, openCreate, closeCreate,
@@ -3304,7 +2231,7 @@
                  editingProfile, editProfile, startEditProfile, cancelEditProfile,
                  viewAvatarErr, editAvatarErr, saveProfile,
                  // utils
-                 copy, displayImageUrl, resolveUrl, explorerTx,
+                 copy, displayImageUrl, resolveUrl, explorerTx,goToExplorer,
                  // content modal
                  showContentModal, contentModal, openContent, closeContent, previewText, isLongContent,
                  // draw pagination
@@ -3321,7 +2248,7 @@
                  // tabs
                  activeTab, setActiveTab,
                  // redeem
-                 showRedeemModal, openRedeem, closeRedeem, confirmRedeem, redeeming, redeemCost, redeemAmountTT, ttTokenAddress, explorerAddr, mineTotal };
+                 showRedeemModal, openRedeem, closeRedeem, confirmRedeem, redeeming, redeemCost, redeemAmountTT, ttTokenAddress, explorerAddr, mineTotal, ethBalance, ttBalance, ttSymbol, refreshBalances };
       }
     });
 
