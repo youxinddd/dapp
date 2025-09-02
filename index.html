@@ -890,7 +890,7 @@
 
     // Target chain configuration (ensure wallet is on correct network)
     const CHAIN_RPC = 'https://carrot.megaeth.com/rpc';
-    const CHAIN_explorer = 'https://megaexplorer.xyz';
+    const CHAIN_explorer = 'https://web3.okx.com/zh-hans/explorer/megaeth-testnet';
     const TARGET_CHAIN_ID = 6342;
     const TARGET_CHAIN_HEX = '0x18C6'; // 6342 in hex
     const TARGET_CHAIN_PARAMS = {
@@ -905,9 +905,10 @@
     const { createApp, ref, reactive, onMounted } = Vue;
 
     // Configurable event query constants
-    const LOG_MAX_RANGE = 90000;       // Max block range per getPastLogs query
-    const EVENT_SEARCH_DEPTH = 500000; // How many recent blocks to search for events
-    const POST_PAGE_SIZE = 10;         // Posts per page
+    const LOG_MAX_RANGE = 90000;       
+    const EVENT_SEARCH_DEPTH = 500000; 
+    const POST_PAGE_SIZE = 10;        
+    const BLOG_DEPLOY_BLOCK = 12852339; 
 
     function tryDecodeContent(raw) {
       if (!raw) return raw;
@@ -1386,12 +1387,14 @@
           }
         }
 
-        // Generic EIP-1193 provider listeners (for injected or WalletConnect)
-        
-                // Ensure read-only provider/contract for event queries (fallback to public RPC)
         function ensureReadOnly() {
           if (!web3) {
-            const provider = window.ethereum ? window.ethereum : CHAIN_RPC;
+            let provider;
+            if (window.ethereum) {
+              provider = window.ethereum; // MetaMask
+            } else {
+              provider = new Web3.providers.HttpProvider(CHAIN_RPC); // RPC URL
+            }
             web3 = new Web3(provider);
           }
           if (!contract) {
@@ -1881,7 +1884,8 @@
             const DEFAULT_SEARCH_DEPTH = EVENT_SEARCH_DEPTH; // search depth window
             const latest = await web3.eth.getBlockNumber();
             drawScanCursor.value = latest;
-            drawScanEnd.value = Math.max(0, latest - DEFAULT_SEARCH_DEPTH);
+            // Use deploy block if provided (>0), otherwise fall back to recent window
+            drawScanEnd.value = BLOG_DEPLOY_BLOCK > 0 ? BLOG_DEPLOY_BLOCK : Math.max(0, latest - DEFAULT_SEARCH_DEPTH);
             hasMoreDraw.value = true;
             await loadMoreDrawRecords();
           } catch (e) { console.error('initDrawRecords error', e); }
