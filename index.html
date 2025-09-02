@@ -290,6 +290,7 @@
                 <span class="tooltip">
                   <div class="mono mb8" style="word-break: break-all;">{{ r.address }}</div>
                   <button class="small-btn" @click="copy(r.address)">复制</button>
+                  <a v-if="explorerAddr(ttTokenAddress)" :href="explorerAddr(r.address)" target="_blank" class="small">区块浏览器</a>
                 </span>
               </div>
             </div>
@@ -400,6 +401,7 @@
             <span class="tooltip">
               <div class="mono mb8" style="word-break: break-all;">{{ account }}</div>
               <button class="small-btn" @click="copy(account)">复制</button>
+              <a v-if="explorerAddr(ttTokenAddress)" :href="explorerAddr(account)" target="_blank" class="small">区块浏览器</a>
             </span>
           </span>
           <span v-if="walletMode === 'local'" class="tag" style="margin-left: 8px;">本地</span>
@@ -564,6 +566,7 @@
                 <span class="tooltip">
                   <div class="mono mb8" style="word-break: break-all;">{{ p.author }}</div>
                   <button class="small-btn" @click="copy(p.author)">复制</button>
+                  <a v-if="explorerAddr(ttTokenAddress)" :href="explorerAddr(p.author)" target="_blank" class="small">区块浏览器</a>
                 </span>
               </span>
               · 评论: {{ p.commentCount }} · 互动人数: {{ p.commenterCount }}
@@ -602,6 +605,7 @@
                       <span class="tooltip">
                         <div class="mono mb8" style="word-break: break-all;">{{ c.commenter }}</div>
                         <button class="small-btn" @click="copy(c.commenter)">复制</button>
+                        <a v-if="explorerAddr(ttTokenAddress)" :href="explorerAddr(c.commenter)" target="_blank" class="small">区块浏览器</a>
                       </span>
                     </span>
                     · {{ formatTime(c.timestamp) }}
@@ -644,6 +648,7 @@
                 <span class="tooltip">
                   <div class="mono mb8" style="word-break: break-all;">{{ account }}</div>
                   <button class="small-btn" @click="copy(account)">复制</button>
+                  <a v-if="explorerAddr(ttTokenAddress)" :href="explorerAddr(account)" target="_blank" class="small">区块浏览器</a>
                 </span>
               </span>
             </div>
