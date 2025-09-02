@@ -246,16 +246,14 @@ contract BlogPlatform is Initializable, ERC721URIStorageUpgradeable, UUPSUpgrade
 
     function getPosts(uint256 offset, uint256 limit) external view returns (Post[] memory result) {
         if (offset >= postCount) {
-            return result; // empty
+            return new Post[](0);
         }
-        uint256 end = offset + limit;
-        if (end > postCount) {
-            end = postCount;
-        }
-        uint256 count = end - offset;
+        uint256 available = postCount - offset;
+        uint256 count = limit < available ? limit : available;
         result = new Post[](count);
-        for (uint i = 0; i < count; i++) {
+        for (uint256 i = 0; i < count; ) {
             result[i] = posts[offset + i];
+            unchecked { ++i; }
         }
     }
 
@@ -263,10 +261,9 @@ contract BlogPlatform is Initializable, ERC721URIStorageUpgradeable, UUPSUpgrade
         uint256[] storage ids = userPostIds[user];
         if (ids.length > 0 || userIndexInitialized[user]) {
             uint256 total = ids.length;
-            if (offset >= total) return result;
-            uint256 end = offset + limit;
-            if (end > total) end = total;
-            uint256 count = end - offset;
+            if (offset >= total) return new Post[](0);
+            uint256 available = total - offset;
+            uint256 count = limit < available ? limit : available;
             result = new Post[](count);
             for (uint256 i = 0; i < count; ) {
                 result[i] = posts[ids[offset + i]];
@@ -284,12 +281,10 @@ contract BlogPlatform is Initializable, ERC721URIStorageUpgradeable, UUPSUpgrade
             unchecked { ++i; }
         }
         if (offset >= matchedCount) {
-            return result;
+            return new Post[](0);
         }
-        uint256 returnCount = limit;
-        if (offset + limit > matchedCount) {
-            returnCount = matchedCount - offset;
-        }
+        uint256 available2 = matchedCount - offset;
+        uint256 returnCount = limit < available2 ? limit : available2;
         result = new Post[](returnCount);
         uint256 index = 0;
         uint256 skipped = 0;
@@ -356,7 +351,7 @@ contract BlogPlatform is Initializable, ERC721URIStorageUpgradeable, UUPSUpgrade
     // 排行榜：返回作者地址与发文数，按发文数降序，支持分页
     function getAuthorsRank(uint256 offset, uint256 limit) external view returns (address[] memory addrs, uint256[] memory counts) {
         uint256 n = postCount;
-        if (n == 0) { return (addrs, counts); }
+        if (n == 0) { return (new address[](0), new uint256[](0)); }
 
         // 收集唯一作者与对应发文数（基于 posts 统计）
         address[] memory uniq = new address[](n);
@@ -394,10 +389,9 @@ contract BlogPlatform is Initializable, ERC721URIStorageUpgradeable, UUPSUpgrade
             unchecked { ++i; }
         }
 
-        if (offset >= u) { return (addrs, counts); }
-        uint256 end = offset + limit;
-        if (end > u) end = u;
-        uint256 m = end - offset;
+        if (offset >= u) { return (new address[](0), new uint256[](0)); }
+        uint256 available = u - offset;
+        uint256 m = limit < available ? limit : available;
         addrs = new address[](m);
         counts = new uint256[](m);
         for (uint256 i = 0; i < m; ) {
