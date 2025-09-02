@@ -625,7 +625,7 @@
       <div class="panel" v-if="activeTab==='profile'">
         <div class="between mb12">
           <h3>我的资料</h3>
-          <div class="small muted">积分: {{ points }}</div>
+          <div class="small muted">我的积分: {{ points }}</div>
         </div>
         <!-- 查看模式 -->
         <div v-if="!editingProfile" class="list mb16">
@@ -693,6 +693,7 @@
       <div class="panel" v-if="activeTab==='draw'">
         <div class="between mb8">
           <h3>抽奖</h3>
+          <div class="small muted">我的积分: {{ points }}</div>
           <div class="small muted">每次消耗 {{ drawCost }} 积分</div>
         </div>
         <div class="list mb16">
