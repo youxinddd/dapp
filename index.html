@@ -225,8 +225,9 @@
       button { min-height: 36px; }
       .small-btn { min-height: 26px; padding: 5px 8px; }
       .tag { padding: 4px 10px; }
-      /* Disable hover tooltips on touch devices */
-      .hover-copy .tooltip { display: none !important; }
+      /* Default: hide tooltip on touch; allow toggling via .open */
+      .hover-copy .tooltip { display: none; }
+      .hover-copy.open .tooltip { display: block; }
     }
   </style>
 </head>
@@ -248,7 +249,15 @@
       <div v-else>
       <div v-if="drawRecords.length===0" class="muted">暂无中奖记录</div>
       <div v-for="(r,idx) in drawRecords" :key="idx" class="card">
-      <div>用户：<span class="mono">{{ short(r.user) }}</span></div>
+      <div>用户：
+        <span class="hover-copy">
+          <span class="mono">{{ short(r.user) }}</span>
+          <span class="tooltip">
+            <div class="mono mb8" style="word-break: break-all;">{{ r.user }}</div>
+            <button class="small-btn" @click="copy(r.user)">复制</button>
+            <a v-if="explorerAddr(ttTokenAddress)" :href="explorerAddr(r.user)" target="_blank" class="small">区块浏览器</a>
+        </span>
+      </div>
       <div>奖品名称：{{ r.prizeName }}</div>
       <div>NFT ID：<span class="mono">#{{ r.tokenId }}</span><span v-if="r.uri" class="small"> · <a :href="resolveUrl(r.uri)" target="_blank">查看</a></span></div>
       <div v-if="r._imageUrl" class="mb8">
@@ -2325,6 +2334,36 @@
               el.setAttribute('autocorrect', 'off');
               el.setAttribute('spellcheck', 'false');
             });
+          } catch (_) {}
+          // Touch devices: tap to toggle hover-copy tooltip
+          try {
+            const isCoarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+            if (isCoarse) {
+              const closeAll = (except = null) => {
+                document.querySelectorAll('.hover-copy.open').forEach(el => { if (el !== except) el.classList.remove('open'); });
+              };
+              const findHoverCopy = (el) => el && el.closest ? el.closest('.hover-copy') : null;
+              // Capture clicks to prevent underlying handlers from triggering (e.g., open explorer)
+              document.addEventListener('click', (e) => {
+                const target = e.target;
+                const insideTooltip = target.closest && target.closest('.hover-copy .tooltip');
+                const hc = findHoverCopy(target);
+                if (hc && !insideTooltip) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  const willOpen = !hc.classList.contains('open');
+                  closeAll(hc);
+                  if (willOpen) hc.classList.add('open');
+                  else hc.classList.remove('open');
+                } else {
+                  closeAll();
+                }
+              }, true);
+              ['scroll', 'touchmove', 'resize', 'orientationchange'].forEach(evt => {
+                window.addEventListener(evt, () => { closeAll(); }, { passive: true });
+              });
+              window.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') closeAll(); });
+            }
           } catch (_) {}
           try {
             // Check if in MetaMask mobile browser
