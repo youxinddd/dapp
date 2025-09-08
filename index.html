@@ -1367,25 +1367,33 @@
         // Modified send transaction function to handle both wallet modes
         async function sendTransaction(method, from) {
           if (walletMode.value === 'local') {
-            
-            // For local wallet, sign and send raw transaction
-            let currentNonce = await web3.eth.getTransactionCount(from, 'pending');
-            console.log("currentNonce:", currentNonce);
-            currentNonce++;
-            const tx = {
-              from: from,
-              to: contract.options.address,
-              data: method.encodeABI(),
-              gas: await method.estimateGas({ from }),
-              gasPrice: web3.utils.toWei('0.025', 'gwei'),
-              nonce: currentNonce
-            };
-            console.log(tx);
-            const signedTx = await web3.eth.accounts.signTransaction(tx, localWallet.value.privateKey);
-            const receipt = await web3.eth.sendSignedTransaction(signedTx.rawTransaction);
-            return receipt;
+            try {
+              // 获取 pending nonce（就是下一个可用 nonce）
+              let currentNonce = await web3.eth.getTransactionCount(from, 'pending');
+              console.log("currentNonce:", currentNonce);
+              // 构造交易
+              const tx = {
+                from: from,
+                to: contract.options.address,
+                data: method.encodeABI(),
+                gas: await method.estimateGas({ from }),
+                gasPrice: web3.utils.toWei('0.05', 'gwei'), // 稍微高点更安全
+                nonce: currentNonce
+              };
+              console.log("tx:", tx);
+              // 签名
+              const signedTx = await web3.eth.accounts.signTransaction(tx, localWallet.value.privateKey);
+              // 广播
+              const receipt = await web3.eth.sendSignedTransaction(signedTx.rawTransaction);
+              console.log("receipt:", receipt);
+
+              return receipt;
+            } catch (err) {
+              console.error("sendTransaction error:", err);
+              throw err;
+            }
           } else {
-            // For MetaMask, use regular send
+            // MetaMask 方式
             return await method.send({ from });
           }
         }
