@@ -324,7 +324,13 @@
         </div>
         <div>
           <label>封面图 URL</label>
-          <ime-input v-model="editingPost.url" placeholder="https://..."></ime-input>
+          <div class="flex">
+            <ime-input v-model="editingPost.url" placeholder="https://..." style="flex:1;"></ime-input>
+            <button class="secondary" @click="onUploadEditPostCover" :disabled="editPostCoverUploading">{{ editPostCoverUploading ? '上传中...' : '上传图片' }}</button>
+          </div>
+          <div v-if="editingPost.url" class="mb8">
+            <img :src="displayImageUrl(editingPost.url)" alt="封面预览" class="cover" referrerpolicy="no-referrer" />
+          </div>
         </div>
         <div>
           <label>内容（已自动解码，保存时自动 base64+gzip 上链）</label>
@@ -372,7 +378,13 @@
         </div>
         <div>
           <label>封面图 URL</label>
-          <ime-input v-model="newPost.url" placeholder="https://..."></ime-input>
+          <div class="flex">
+            <ime-input v-model="newPost.url" placeholder="https://..." style="flex:1;"></ime-input>
+            <button class="secondary" @click="onUploadNewPostCover" :disabled="newPostCoverUploading">{{ newPostCoverUploading ? '上传中...' : '上传图片' }}</button>
+          </div>
+          <div v-if="newPost.url" class="mb8">
+            <img :src="displayImageUrl(newPost.url)" alt="封面预览" class="cover" referrerpolicy="no-referrer" />
+          </div>
         </div>
         <div>
           <label>内容（保存时自动 base64+gzip 上链；尽量简短）</label>
@@ -573,10 +585,10 @@
               · {{ formatTime(p.timestamp) }}
             </div>
             <div v-if="p.url" class="mb8">
-              <a :href="p.url" target="_blank">
+              <a :href="resolveUrl(p.url)" target="_blank">
                 <img :src="displayImageUrl(p.url)" alt="封面图" class="cover" v-if="!p._imgErr" @error="onPostImgError(p)" referrerpolicy="no-referrer"/>
               </a>
-              <div v-if="p._imgErr" class="small muted">无法加载图片，<a :href="p.url" target="_blank">打开链接</a></div>
+              <div v-if="p._imgErr" class="small muted">无法加载图片，<a :href="resolveUrl(p.url)" target="_blank">打开链接</a></div>
             </div>
             <div class="mb12">
               <div>{{ previewText(p) }}</div>
@@ -663,7 +675,10 @@
           </div>
           <div>
             <label>头像 URL</label>
-            <ime-input v-model="editProfile.avatar" placeholder="https://..."></ime-input>
+            <div class="flex">
+              <ime-input v-model="editProfile.avatar" placeholder="https://..." style="flex:1;"></ime-input>
+              <button class="secondary" @click="onUploadAvatar" :disabled="avatarUploading">{{ avatarUploading ? '上传中...' : '上传图片' }}</button>
+            </div>
             <div v-if="editProfile.avatar" class="mb8">
               <img :src="displayImageUrl(editProfile.avatar)" alt="头像预览" class="avatar" v-if="!editAvatarErr" @error="editAvatarErr = true" referrerpolicy="no-referrer"/>
               <div v-else class="small muted">头像加载失败</div>
@@ -965,9 +980,9 @@
         let path = u.slice(7); // remove scheme
         // normalize leading ipfs/
         if (path.startsWith('ipfs/')) {
-          return 'https://ipfs.io/' + path;
+          return 'https://black-secret-spoonbill-589.mypinata.cloud/' + path;
         }
-        return 'https://ipfs.io/ipfs/' + path;
+        return 'https://black-secret-spoonbill-589.mypinata.cloud/ipfs/' + path;
       }
       return u;
     }
@@ -1033,8 +1048,9 @@
     // For displaying images safely under HTTPS and avoiding referer-based hotlinking
     function displayImageUrl(u) {
       if (!u || typeof u !== 'string') return u;
-      // do not transform data URLs or ipfs (already resolved elsewhere)
-      if (u.startsWith('data:') || u.startsWith('ipfs://')) return u;
+      // do not transform data URLs; ipfs resolved via configured gateway
+      if (u.startsWith('data:')) return u;
+      if (u.startsWith('ipfs://')) return resolveUrl(u);
       if (u.startsWith('http://')) {
         const noScheme = u.replace(/^https?:\/\//, '');
         return 'https://images.weserv.nl/?url=' + encodeURIComponent(noScheme);
@@ -1351,17 +1367,19 @@
         // Modified send transaction function to handle both wallet modes
         async function sendTransaction(method, from) {
           if (walletMode.value === 'local') {
+            
             // For local wallet, sign and send raw transaction
             let currentNonce = await web3.eth.getTransactionCount(from, 'pending');
+            console.log("currentNonce: " + currentNonce);
+            currentNonce++;
             const tx = {
               from: from,
               to: contract.options.address,
               data: method.encodeABI(),
               gas: await method.estimateGas({ from }),
-              gasPrice: web3.utils.toWei('0.005', 'gwei'),
+              gasPrice: web3.utils.toWei('0.01', 'gwei'),
               nonce: currentNonce
             };
-            currentNonce++;
             console.log(tx);
             const signedTx = await web3.eth.accounts.signTransaction(tx, localWallet.value.privateKey);
             const receipt = await web3.eth.sendSignedTransaction(signedTx.rawTransaction);
@@ -2086,6 +2104,87 @@
 
         // Content preview and modal for full content
         const CONTENT_PREVIEW_LIMIT = 300;
+        // Pinata image upload helpers (hardcoded API Key/Secret)
+        const PINATA_API_KEY = 'fe075c3f02ea255b8554';
+        const PINATA_API_SECRET = '3684de61cf124661170c31bb98d80daba9be1f69fcb5a59be38cec8e97f378aa';
+        function pickLocalImage(accept = 'image/*') {
+          return new Promise((resolve, reject) => {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = accept;
+            input.onchange = () => {
+              const file = input.files && input.files[0];
+              if (file) resolve(file); else reject(new Error('未选择文件'));
+            };
+            input.click();
+          });
+        }
+        async function compressImageFile(file, maxW = 1280, maxH = 1280, quality = 0.85) {
+          const img = document.createElement('img');
+          const url = URL.createObjectURL(file);
+          try {
+            await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = url; });
+            let { width, height } = img;
+            const ratio = Math.min(1, maxW / width, maxH / height);
+            const w = Math.max(1, Math.round(width * ratio));
+            const h = Math.max(1, Math.round(height * ratio));
+            const canvas = document.createElement('canvas');
+            canvas.width = w; canvas.height = h;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, w, h);
+            const blob = await new Promise((res) => canvas.toBlob(res, 'image/jpeg', quality));
+            if (!blob) throw new Error('压缩失败');
+            return blob;
+          } finally {
+            URL.revokeObjectURL(url);
+          }
+        }
+        async function uploadImageToPinata(blob, filename = 'image.jpg') {
+          if (!PINATA_API_KEY || !PINATA_API_SECRET) throw new Error('未配置 Pinata API Key/Secret');
+          const form = new FormData();
+          form.append('file', blob, filename);
+          const resp = await fetch('https://api.pinata.cloud/pinning/pinFileToIPFS', {
+            method: 'POST',
+            headers: {
+              'pinata_api_key': PINATA_API_KEY,
+              'pinata_secret_api_key': PINATA_API_SECRET,
+            },
+            body: form,
+          });
+          if (!resp.ok) {
+            const text = await resp.text().catch(() => '');
+            throw new Error('上传失败: ' + resp.status + ' ' + text);
+          }
+          const json = await resp.json();
+          if (!json || !json.IpfsHash) throw new Error('Pinata 返回异常');
+          return `https://black-secret-spoonbill-589.mypinata.cloud/ipfs/${json.IpfsHash}`;
+        }
+        async function chooseAndUpload(setter, uploadingRef) {
+          try {
+            uploadingRef.value = true;
+            const file = await pickLocalImage('image/*');
+            const blob = await compressImageFile(file);
+            const url = await uploadImageToPinata(blob, (file && file.name) || 'image.jpg');
+            setter(url);
+          } catch (e) {
+            console.error(e);
+            alert(e?.message || String(e));
+          } finally {
+            uploadingRef.value = false;
+          }
+        }
+        const avatarUploading = ref(false);
+        const newPostCoverUploading = ref(false);
+        const editPostCoverUploading = ref(false);
+        async function onUploadAvatar() {
+          await chooseAndUpload((url) => { editProfile.avatar = url; }, avatarUploading);
+        }
+        async function onUploadNewPostCover() {
+          await chooseAndUpload((url) => { newPost.url = url; }, newPostCoverUploading);
+        }
+        async function onUploadEditPostCover() {
+          await chooseAndUpload((url) => { editingPost.url = url; }, editPostCoverUploading);
+        }
         const showContentModal = ref(false);
         const contentModal = reactive({ title: '', content: '' });
         function getFullContent(p) { return (p && (p.decodedContent ?? p.content)) || ''; }
@@ -2245,7 +2344,10 @@
                  copy, displayImageUrl, resolveUrl, explorerTx,goToExplorer,
                  // content modal
                  showContentModal, contentModal, openContent, closeContent, previewText, isLongContent,
-                 // draw pagination
+                 // image upload helpers
+                 onUploadAvatar, onUploadNewPostCover, onUploadEditPostCover,
+                 avatarUploading, newPostCoverUploading, editPostCoverUploading,
+                                  // draw pagination
                  loadMoreDrawRecords, hasMoreDraw, loadingMoreDraw, drawPageSize,
                  // rank modal
                  showRankModal, openRank, closeRank, initRank, loadRankPage,
