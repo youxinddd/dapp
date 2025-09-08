@@ -538,6 +538,24 @@
     </div>
   </div>
 
+  <!-- Draw Result Modal -->
+  <div v-if="showDrawResultModal" class="modal-overlay" @click.self="closeDrawResult">
+    <div class="modal">
+      <div class="between mb12">
+        <h3>恭喜中奖</h3>
+        <button class="secondary" @click="closeDrawResult">关闭</button>
+      </div>
+      <div class="list">
+        <div class="small">奖品：<strong>{{ drawResult.prizeName || '未知奖品' }}</strong></div>
+        <div v-if="drawResult.imageUrl" class="mb8">
+          <img :src="displayImageUrl(drawResult.imageUrl)" class="nft-img" alt="prize" referrerpolicy="no-referrer" />
+        </div>
+        <div class="small muted" v-if="drawResult.tokenId">NFT #{{ drawResult.tokenId }}</div>
+        <div class="small" v-if="drawResult.uri"><a :href="resolveUrl(drawResult.uri)" target="_blank">查看元数据</a></div>
+      </div>
+    </div>
+  </div>
+
     <div class="tabs">
       <button class="tab" :class="activeTab==='posts' ? 'active' : ''" @click="setActiveTab('posts')">最新文章</button>
       <button class="tab" :class="activeTab==='profile' ? 'active' : ''" @click="setActiveTab('profile')">我的资料</button>
@@ -1141,6 +1159,8 @@
         const redeemAmountTT = ref(50);
         const redeeming = ref(false);
         const showRedeemModal = ref(false);
+        const showDrawResultModal = ref(false);
+        const drawResult = reactive({ prizeName: '', imageUrl: '', uri: '', tokenId: null, tx: '' });
         const profile = reactive({ nickname: '', avatar: '', bio: '' });
         const points = ref(0);
         const nfts = ref([]);
@@ -1205,6 +1225,15 @@
         let web3 = null;
         let contract = null;
         const hasProviderListeners = ref(false);
+        let localNonces = {};
+        const sendQueues = {};
+        function runInQueue(addr, fn) {
+          if (!sendQueues[addr]) sendQueues[addr] = Promise.resolve();
+          const p = sendQueues[addr].then(() => fn());
+          // 保持队列链路，即使当前任务失败
+          sendQueues[addr] = p.catch(() => {});
+          return p;
+        }
 
         // Local wallet management functions
         function generateLocalWallet() {
@@ -1364,34 +1393,80 @@
           loadAll();
         }
 
+        async function sendTransactionSafe(method, from) {
+          const MAX_RETRY = 10;
+          let attempt = 0;
+          const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+          // 基于网络建议价格，稍作上浮
+          let gasPrice;
+          try {
+            const base = await web3.eth.getGasPrice();
+            gasPrice = (BigInt(base) + BigInt(web3.utils.toWei('0.02', 'gwei'))).toString();
+          } catch {
+            gasPrice = web3.utils.toWei('0.06', 'gwei');
+          }
+
+          // 不跳号：初始严格使用 pendingNonce，只有在收到 nonce too low 后才递增
+          let useNonce = null;
+
+          while (attempt < MAX_RETRY) {
+            try {
+              const pendingNonce = await web3.eth.getTransactionCount(from, 'pending').catch(async () => {
+                return await web3.eth.getTransactionCount(from, 'latest');
+              });
+              if (useNonce === null) useNonce = pendingNonce; // 初次使用 pendingNonce
+
+              console.log(`👉 Attempt ${attempt + 1}`);
+              console.log('   pendingNonce:', pendingNonce, 'useNonce:', useNonce);
+
+              let gasLimit;
+              try { gasLimit = await method.estimateGas({ from }); }
+              catch { gasLimit = 150000; }
+
+              const tx = {
+                from,
+                to: contract.options.address,
+                data: method.encodeABI(),
+                gas: gasLimit,
+                gasPrice,
+                nonce: useNonce,
+              };
+              console.log('🚀 Sending tx:', tx);
+
+              const signedTx = await web3.eth.accounts.signTransaction(tx, localWallet.value.privateKey);
+              const receipt = await web3.eth.sendSignedTransaction(signedTx.rawTransaction);
+              console.log('✅ Success:', receipt.transactionHash);
+              return receipt;
+            } catch (err) {
+              const msg = (err && (err.message || String(err))).toLowerCase();
+              console.warn('⚠️ sendTransaction error:', msg);
+
+              if (msg.includes('nonce too low')) {
+                // 仅在明确 nonce too low 时递增本地待用 nonce
+                useNonce = (useNonce === null ? 0 : useNonce) + 1;
+                // 指数回退：200ms, 400ms, 800ms ...
+                await sleep(200 * Math.pow(2, attempt));
+              } else if (msg.includes('replacement transaction underpriced') || msg.includes('underpriced')) {
+                // 抬价 0.01 gwei 并退避
+                try { gasPrice = (BigInt(gasPrice) + BigInt(web3.utils.toWei('0.01', 'gwei'))).toString(); } catch {}
+                await sleep(200 * Math.pow(2, attempt));
+              } else if (msg.includes('already known') || msg.includes('known transaction')) {
+                throw err; // 交由上层处理
+              } else {
+                throw err;
+              }
+            }
+            attempt++;
+          }
+          throw new Error('❌ Failed to send transaction after retries');
+        }
+
         // Modified send transaction function to handle both wallet modes
         async function sendTransaction(method, from) {
           if (walletMode.value === 'local') {
-            try {
-              // 获取 pending nonce（就是下一个可用 nonce）
-              let currentNonce = await web3.eth.getTransactionCount(from, 'pending');
-              console.log("currentNonce:", currentNonce);
-              // 构造交易
-              const tx = {
-                from: from,
-                to: contract.options.address,
-                data: method.encodeABI(),
-                gas: await method.estimateGas({ from }),
-                gasPrice: web3.utils.toWei('0.05', 'gwei'), // 稍微高点更安全
-                nonce: currentNonce
-              };
-              console.log("tx:", tx);
-              // 签名
-              const signedTx = await web3.eth.accounts.signTransaction(tx, localWallet.value.privateKey);
-              // 广播
-              const receipt = await web3.eth.sendSignedTransaction(signedTx.rawTransaction);
-              console.log("receipt:", receipt);
-
-              return receipt;
-            } catch (err) {
-              console.error("sendTransaction error:", err);
-              throw err;
-            }
+            // 地址级队列，严格串行发送
+            return await runInQueue(from, () => sendTransactionSafe(method, from));
           } else {
             // MetaMask 方式
             return await method.send({ from });
@@ -1422,10 +1497,10 @@
         function ensureReadOnly() {
           if (!web3) {
             let provider;
-            if (window.ethereum) {
-              provider = window.ethereum; // MetaMask
+            if (walletMode.value === 'metamask' && window.ethereum) {
+              provider = window.ethereum; // 仅在 MetaMask 模式下使用注入的 provider
             } else {
-              provider = new Web3.providers.HttpProvider(CHAIN_RPC); // RPC URL
+              provider = new Web3.providers.HttpProvider(CHAIN_RPC); // 其他情况使用直连 RPC
             }
             web3 = new Web3(provider);
           }
@@ -1439,6 +1514,8 @@
         }
 
         function registerProviderListeners() {
+          // 仅在 MetaMask 模式下注册 provider 监听
+          if (walletMode.value !== 'metamask') return;
           if (!window.ethereum || hasProviderListeners.value) return;
           // 账户切换
           window.ethereum.on('accountsChanged', async (accs) => {
@@ -1832,9 +1909,31 @@
           try {
             loadingDraw.value = true;
             const method = contract.methods.draw();
-            await sendTransaction(method, account.value);
+            const receipt = await sendTransaction(method, account.value);
+
+            // 解析回执中的 NFTDrawn 事件
+            try {
+              const eventAbi = getEventAbi('NFTDrawn');
+              const signature = web3.eth.abi.encodeEventSignature(eventAbi);
+              const logs = (receipt && receipt.logs) || [];
+              const log = logs.find(l => String(l.address).toLowerCase() === String(contract.options.address).toLowerCase() && l.topics && l.topics[0] === signature);
+              if (log) {
+                const d = web3.eth.abi.decodeLog(eventAbi.inputs, log.data, log.topics.slice(1));
+                drawResult.prizeName = d.prizeName || '';
+                drawResult.uri = d.uri || '';
+                drawResult.tokenId = Number(d.tokenId || 0);
+                drawResult.tx = log.transactionHash || (receipt && receipt.transactionHash) || '';
+                drawResult.imageUrl = await resolvePrizeImage(drawResult.uri);
+                showDrawResultModal.value = true;
+              }
+            } catch (err) {
+              console.warn('parse draw event failed', err);
+            }
+
             await loadAll();
-            alert('抽奖完成，检查 NFT 列表');
+            if (!showDrawResultModal.value) {
+              alert('抽奖完成，检查 NFT 列表');
+            }
           } catch (e) {
             console.error(e);
             alert('抽奖失败: ' + (e?.message || e));
@@ -1847,6 +1946,7 @@
           showRedeemModal.value = true;
         }
         function closeRedeem() { showRedeemModal.value = false; }
+        function closeDrawResult() { showDrawResultModal.value = false; }
         async function confirmRedeem() {
           if (!account.value) return alert('请先连接钱包');
           if (points.value < redeemCost.value) return alert('积分不足');
@@ -2369,7 +2469,7 @@
                  // tabs
                  activeTab, setActiveTab,
                  // redeem
-                 showRedeemModal, openRedeem, closeRedeem, confirmRedeem, redeeming, redeemCost, redeemAmountTT, ttTokenAddress, explorerAddr, mineTotal, ethBalance, ttBalance, ttSymbol, refreshBalances };
+                 showRedeemModal, openRedeem, closeRedeem, confirmRedeem, redeeming, redeemCost, redeemAmountTT, showDrawResultModal, drawResult, closeDrawResult, ttTokenAddress, explorerAddr, mineTotal, ethBalance, ttBalance, ttSymbol, refreshBalances };
       }
     });
 
