@@ -1929,11 +1929,8 @@
             } catch (err) {
               console.warn('parse draw event failed', err);
             }
-
             await loadAll();
-            if (!showDrawResultModal.value) {
-              alert('抽奖完成，检查 NFT 列表');
-            }
+
           } catch (e) {
             console.error(e);
             alert('抽奖失败: ' + (e?.message || e));
