@@ -19,7 +19,7 @@ contract BlogPlatform is Initializable, ERC721URIStorageUpgradeable, UUPSUpgrade
         address author;
         uint256 commentCount;
         uint256 commenterCount;
-        uint256 timestamp; // 新增：创建时间
+        uint256 timestamp; 
     }
 
 
@@ -76,6 +76,7 @@ contract BlogPlatform is Initializable, ERC721URIStorageUpgradeable, UUPSUpgrade
     event NFTDrawn(address indexed user, uint256 tokenId, string prizeName, string uri, uint256 timestamp);
     event PostEdited(uint256 indexed postId, address indexed editor);
     event TTRedeemed(address indexed user, uint256 pointsCost, uint256 amount);
+    event PointsAdded(address indexed user, uint256 amount, uint256 newTotal);
 
     constructor() {
         _disableInitializers(); // 防止实现合约被初始化
@@ -219,6 +220,13 @@ contract BlogPlatform is Initializable, ERC721URIStorageUpgradeable, UUPSUpgrade
     }
 
     
+    function addPoints(address user, uint256 amount) external onlyOwner {
+        require(user != address(0), "invalid user");
+        require(amount > 0, "amount=0");
+        points[user] += amount;
+        emit PointsAdded(user, amount, points[user]);
+    }
+
     function addPrize(string memory name, string memory uri, uint256 weight) external onlyOwner {
         prizes.push(Prize(name, uri, weight));
         emit PrizeAdded(name, uri, weight);
