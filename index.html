@@ -1370,14 +1370,14 @@
             
             // For local wallet, sign and send raw transaction
             let currentNonce = await web3.eth.getTransactionCount(from, 'pending');
-            console.log("currentNonce: " + currentNonce);
+            console.log("currentNonce:", currentNonce);
             currentNonce++;
             const tx = {
               from: from,
               to: contract.options.address,
               data: method.encodeABI(),
               gas: await method.estimateGas({ from }),
-              gasPrice: web3.utils.toWei('0.01', 'gwei'),
+              gasPrice: web3.utils.toWei('0.025', 'gwei'),
               nonce: currentNonce
             };
             console.log(tx);
