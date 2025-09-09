@@ -107,7 +107,7 @@
     /* bridge area to avoid flicker when moving cursor from trigger to tooltip */
     .hover-copy::after { content: ""; position: absolute; left: 0; top: 100%; width: 100%; height: 12px; }
     .hover-copy .tooltip {
-      display: none; position: absolute; top: 100%; left: 0; transform: translateY(6px); z-index: 1000;
+      display: none; position: absolute; top: 100%; left: 0; transform: translateY(6px); z-index: 5000;
       background: #0b1220; color: var(--text); border: 1px solid var(--border);
       padding: 8px 10px; border-radius: 8px; min-width: 240px; max-width: 360px;
       box-shadow: 0 6px 20px rgba(0,0,0,0.35);
@@ -115,6 +115,8 @@
     }
     /* keep visible when either trigger or tooltip is hovered */
     .hover-copy:hover .tooltip, .hover-copy .tooltip:hover { display: block; }
+    /* ensure tooltip stacks above sticky headers/tabs when opened */
+    .hover-copy.open { position: relative; z-index: 5000; }
     .small-btn {
       background: #334155; color: #fff; border: none; padding: 3px 6px; border-radius: 6px; cursor: pointer; font-size: 11px;
       touch-action: manipulation;
@@ -200,6 +202,7 @@
         transform: translateX(-50%) translateY(6px); 
         min-width: 200px; 
         max-width: 280px; 
+        z-index: 5000;
       }
       /* Sticky, scrollable tabs */
       .tabs { 
