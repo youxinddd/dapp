@@ -738,6 +738,13 @@
           </div>
           <div v-if="nfts.length===0" class="small muted">暂无持有</div>
         </div>
+        <div class="between" style="margin-top:8px;">
+          <div class="small muted">第 {{ nftPage }} / {{ nftTotalPages }} 页</div>
+          <div class="flex" style="gap:6px;">
+            <button class="secondary" @click="prevNftPage" :disabled="!hasPrevNft">上一页</button>
+            <button class="secondary" @click="nextNftPage" :disabled="!hasNextNft">下一页</button>
+          </div>
+        </div>
       </div>
 
       <div class="panel" v-if="activeTab==='draw'">
@@ -919,10 +926,6 @@
         { "internalType": "uint256[]", "name": "counts", "type": "uint256[]" }
       ],
       "stateMutability": "view", "type": "function" },
-    { "inputs": [ { "internalType": "address", "name": "owner", "type": "address" } ],
-      "name": "getOwnedTokens",
-      "outputs": [ { "internalType": "uint256[]", "name": "", "type": "uint256[]" } ],
-      "stateMutability": "view", "type": "function" },
     { "inputs": [ { "internalType": "uint256", "name": "tokenId", "type": "uint256" } ],
       "name": "tokenURI",
       "outputs": [ { "internalType": "string", "name": "", "type": "string" } ],
@@ -956,10 +959,13 @@
     const { createApp, ref, reactive, onMounted } = Vue;
 
     // Configurable event query constants
-    const LOG_MAX_RANGE = 90000;       
-    const EVENT_SEARCH_DEPTH = 500000; 
+    const LOG_MAX_RANGE = 15000;       
+    const EVENT_SEARCH_DEPTH = 5000000; 
     const POST_PAGE_SIZE = 10;        
     const BLOG_DEPLOY_BLOCK = 12852339; 
+    // NFT paging defaults
+    const NFT_PAGE_SIZE = 24; // default items per page
+    const NFT_BATCH_SIZE = 100; // reserved for future batch requests 
 
     function tryDecodeContent(raw) {
       if (!raw) return raw;
@@ -1183,6 +1189,8 @@
 
         const connecting = ref(false);
         const posting = ref(false);
+        const loadingAll = ref(false);
+        const lastLoadAllAt = ref(0);
         const loadingDraw = ref(false);
         const savingProfile = ref(false);
                 const postFilter = ref('all');
@@ -1217,6 +1225,13 @@
         const editAvatarErr = ref(false);
         const editingProfile = ref(false);
         const editProfile = reactive({ nickname: '', avatar: '', bio: '' });
+        // NFT paging state and cache index
+        const nftPage = ref(1);
+        const nftPageSize = ref(NFT_PAGE_SIZE);
+        const _nftTokenIds = ref([]);
+        const nftTotalPages = Vue.computed(() => Math.max(1, Math.ceil(Number((_nftTokenIds.value || []).length || 0) / Number(nftPageSize.value || NFT_PAGE_SIZE))));
+        const hasPrevNft = Vue.computed(() => nftPage.value > 1);
+        const hasNextNft = Vue.computed(() => nftPage.value < nftTotalPages.value);
         // edit modal state
         const showEditModal = ref(false);
         const editingPost = reactive({ id: null, title: '', content: '', url: '' });
@@ -1395,9 +1410,16 @@
         }
 
         function disconnect() {
+          // clear local view/state
+          if (account.value) {
+            try { clearNftCache(account.value); } catch (_) {}
+          }
           account.value = '';
           walletMode.value = '';
           localWallet.value = null;
+          nfts.value = [];
+          _nftTokenIds.value = [];
+          nftPage.value = 1;
           showWalletSettings.value = false;
           if (web3 && web3.eth.accounts.wallet) {
             web3.eth.accounts.wallet.clear();
@@ -1523,6 +1545,180 @@
         // Get event ABI by name from static BLOG_ABI
         function getEventAbi(name) {
           return BLOG_ABI.find(o => o && o.type === 'event' && o.name === name);
+        }
+
+        // Simple sleep utility for pacing RPC calls
+        function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+        // Safe log query that splits ranges and backs off on provider limits
+        async function getPastLogsSafe({ fromBlock, toBlock, address, topics }) {
+          let from = Number(fromBlock);
+          const to = Number(toBlock);
+          let seg = Math.min(Number(LOG_MAX_RANGE || 15000), Math.max(1, to - from + 1));
+          const minSeg = 2000;
+          const out = [];
+          let backoff = 200;
+          while (from <= to) {
+            const end = Math.min(to, from + seg - 1);
+            try {
+              const chunk = await web3.eth.getPastLogs({ fromBlock: from, toBlock: end, address, topics });
+              if (Array.isArray(chunk) && chunk.length) out.push(...chunk);
+              from = end + 1;
+              // slight ramp-up if stable
+              if (seg < Number(LOG_MAX_RANGE || 15000)) seg = Math.min(Number(LOG_MAX_RANGE || 15000), Math.floor(seg * 1.25));
+              backoff = 200;
+            } catch (e) {
+              const msg = String(e && (e.message || e)).toLowerCase();
+              const transient = msg.includes('429') || msg.includes('rate limit') || msg.includes('server is busy') || msg.includes('over compute unit') || msg.includes('timeout') || msg.includes('timed out');
+              if (transient) {
+                if (seg > minSeg) seg = Math.max(minSeg, Math.floor(seg / 2));
+                await sleep(backoff);
+                backoff = Math.min(2000, Math.floor(backoff * 1.5));
+                continue;
+              }
+              throw e;
+            }
+          }
+          return out;
+        }
+
+        // Retry wrapper for view/event calls with backoff and jitter
+        async function withRetry(fn, _opts = {}) {
+          try { return await fn(); }
+          catch (e) {
+            const msg = String(e && (e.message || e)).toLowerCase();
+            const transient = msg.includes('server is busy') || msg.includes('rate limit') || msg.includes('429') || msg.includes('timeout') || msg.includes('timed out') || msg.includes('temporarily') || msg.includes('over compute unit');
+            if (transient) {
+              // Immediately pause further RPCs for this session
+              pauseRpcForever();
+            }
+            throw e;
+          }
+        }
+
+        // Global view-call scheduler to avoid bursts (serializes view calls and enforces min gap)
+        const MIN_VIEW_GAP = 300; // ms between RPC calls
+        const viewQueue = { p: Promise.resolve(), last: 0 };
+        // Global pause switch: once paused, no more RPC view calls in this session
+        let RPC_PAUSED = false;
+        function isRpcPaused() { return RPC_PAUSED; }
+        function pauseRpcForever() { RPC_PAUSED = true; console.warn('RPC paused due to prior error'); }
+        function resumeRpc() { RPC_PAUSED = false; }
+        function scheduleView(fn) {
+          if (isRpcPaused()) return Promise.reject(new Error('RPC paused'));
+          const run = async () => {
+            if (isRpcPaused()) throw new Error('RPC paused');
+            const now = Date.now();
+            const since = now - (viewQueue.last || 0);
+            if (since < MIN_VIEW_GAP) {
+              await sleep(MIN_VIEW_GAP - since);
+            }
+            if (isRpcPaused()) throw new Error('RPC paused');
+            const res = await fn();
+            viewQueue.last = Date.now();
+            return res;
+          };
+          // chain to guarantee serialization
+          viewQueue.p = viewQueue.p.then(run, run);
+          return viewQueue.p;
+        }
+        function callView(fn) { return scheduleView(() => withRetry(fn)); }
+
+        // Event cache helpers (incremental sync to reduce RPC load)
+        const EVENTS_CACHE_MAX = 10000;
+        const MAX_CHUNKS_PER_SYNC = 9999; // cap per-run budget; allow deep scans with 1s interval
+        const EVENT_SYNC_MIN_GAP = 10000; // min ms between two syncs for same key
+        const eventSyncState = {}; // { [key]: { promise, lastSyncAt, cooldownUntil } }
+        function buildEventCacheKey(eventName, options = {}) {
+          let key = `${BLOG_ADDRESS}_${eventName}`;
+          if (options && options.filter && options.filter.postId != null) key += `_post_${options.filter.postId}`;
+          return key;
+        }
+        async function getLatestBlockSafe() { return await scheduleView(() => withRetry(() => web3.eth.getBlockNumber())); }
+        async function fetchEventsChunked(eventName, options, fromBlock, toBlock, step = 80000, maxChunks = MAX_CHUNKS_PER_SYNC) {
+          let out = [];
+          let chunks = 0;
+          let lastProcessed = fromBlock - 1;
+          for (let start = fromBlock; start <= toBlock; start += step) {
+            if (chunks >= maxChunks) break;
+            const end = Math.min(start + step - 1, toBlock);
+            const evs = await scheduleView(() => withRetry(() => contract.getPastEvents(eventName, { ...options, fromBlock: start, toBlock: end })));
+            if (Array.isArray(evs) && evs.length) out = out.concat(evs);
+            lastProcessed = end;
+            chunks++;
+            await sleep(1000);
+          }
+          return { events: out, lastProcessed };
+        }
+        async function syncEventsCached(eventName, options = {}, deployBlock = BLOG_DEPLOY_BLOCK) {
+          const key = buildEventCacheKey(eventName, options);
+          const storageKey = `events_${key}`;
+          const blockKey = `lastBlock_${key}`;
+          let cached = [];
+          try { cached = JSON.parse(localStorage.getItem(storageKey) || '[]'); } catch (_) { cached = []; }
+          let lastBlock = 0;
+          try { lastBlock = parseInt(localStorage.getItem(blockKey) || '0'); } catch (_) { lastBlock = 0; }
+
+          // If globally paused, return cached immediately without any network calls
+          if (isRpcPaused()) {
+            return cached;
+          }
+
+          const now = Date.now();
+          const state = (eventSyncState[key] = eventSyncState[key] || { promise: null, lastSyncAt: 0, cooldownUntil: 0 });
+          if (now < state.cooldownUntil) {
+            return cached; // cooldown: skip network
+          }
+          // de-duplicate concurrent syncs
+          if (state.promise) {
+            try { await state.promise; } catch (_) {}
+            return cached;
+          }
+
+          const doSync = async () => {
+            const latest = await getLatestBlockSafe();
+            let startFrom = 0;
+            if (deployBlock && deployBlock > 0 && deployBlock <= latest) {
+              startFrom = deployBlock;
+            } else {
+              // deployBlock missing or beyond latest: scan from genesis
+              startFrom = 0;
+            }
+            if (lastBlock < startFrom - 1) lastBlock = startFrom - 1;
+            // throttle frequent syncs
+            if (now - state.lastSyncAt < EVENT_SYNC_MIN_GAP) {
+              return cached;
+            }
+            if (lastBlock >= latest) {
+              state.lastSyncAt = now;
+              return cached;
+            }
+            try {
+              const { events: newEvents, lastProcessed } = await fetchEventsChunked(eventName, options, lastBlock + 1, latest, 80000, MAX_CHUNKS_PER_SYNC);
+              if (Array.isArray(newEvents) && newEvents.length) {
+                cached = cached.concat(newEvents);
+                if (cached.length > EVENTS_CACHE_MAX) cached = cached.slice(cached.length - EVENTS_CACHE_MAX);
+              }
+              // advance progress up to lastProcessed only
+              if (lastProcessed >= lastBlock) {
+                lastBlock = lastProcessed;
+                try {
+                  localStorage.setItem(storageKey, JSON.stringify(cached));
+                  localStorage.setItem(blockKey, String(lastBlock));
+                } catch (_) {}
+              }
+              state.lastSyncAt = Date.now();
+              return cached;
+            } catch (e) {
+              // on rate limit, enter cooldown and return cached
+              state.cooldownUntil = Date.now() + EVENT_SYNC_MIN_GAP;
+              return cached;
+            }
+          };
+
+          state.promise = doSync();
+          try { await state.promise; } finally { state.promise = null; }
+          return cached;
         }
 
         function registerProviderListeners() {
@@ -1690,7 +1886,7 @@
           if (!contract) return;
           try {
             if (account.value) {
-              const prof = await contract.methods.getUserProfile(account.value).call();
+              const prof = await callView(() => contract.methods.getUserProfile(account.value).call());
               profile.nickname = prof[0].nickname;
               profile.avatar = prof[0].avatar;
               profile.bio = prof[0].bio;
@@ -1704,9 +1900,12 @@
 
         async function loadAll() {
           if (!contract) return;
+          if (loadingAll.value) return;
+          if (Date.now() - (lastLoadAllAt.value || 0) < 4000) return; // de-dupe rapid triggers
+          loadingAll.value = true;
           try {
             // total posts
-            totalPosts.value = Number(await contract.methods.getTotalPosts().call());
+            totalPosts.value = Number(await callView(() => contract.methods.getTotalPosts().call()));
 
             
             // load posts according to filter and page
@@ -1714,7 +1913,7 @@
 
             // load profile & points if connected
             if (account.value) {
-              const prof = await contract.methods.getUserProfile(account.value).call();
+              const prof = await callView(() => contract.methods.getUserProfile(account.value).call());
               profile.nickname = prof[0].nickname;
               profile.avatar = prof[0].avatar;
               profile.bio = prof[0].bio;
@@ -1722,7 +1921,7 @@
             }
 
             // prizes list
-            prizes.value = (await contract.methods.getPrizeList().call()).map(p => ({
+            prizes.value = (await callView(() => contract.methods.getPrizeList().call())).map(p => ({
               name: p.name, uri: p.uri, weight: Number(p.weight), imageUrl: '', _imgErr: false
             }));
 
@@ -1731,7 +1930,7 @@
             // draw cost is fixed at 50 in current contract; expose constant here
             drawCost.value = 50;
             try {
-              ttTokenAddress.value = await contract.methods.ttToken().call();
+              ttTokenAddress.value = await callView(() => contract.methods.ttToken().call());
             } catch (e) {
               ttTokenAddress.value = '';
             }
@@ -1740,6 +1939,9 @@
             await loadNFTs();
           } catch (e) {
             console.error('loadAll error', e);
+          } finally {
+            lastLoadAllAt.value = Date.now();
+            loadingAll.value = false;
           }
         }
 
@@ -1749,11 +1951,11 @@
             if (postFilter.value === 'mine') {
               if (!account.value) { posts.value = []; mineTotal.value = 0; return; }
                                           {
-                const total = Number(await contract.methods.getUserPostCount(account.value).call());
+                const total = Number(await callView(() => contract.methods.getUserPostCount(account.value).call()));
                 mineTotal.value = total;
                 if (total <= 0) { posts.value = []; return; }
                 const { offset, limit } = calcReversePagination(total, currentPageMine.value, POST_PAGE_SIZE);
-                const list = limit > 0 ? await contract.methods.getUserPosts(account.value, offset, limit).call() : [];
+                const list = limit > 0 ? await callView(() => contract.methods.getUserPosts(account.value, offset, limit).call()) : [];
                 posts.value = (list || []).map(p => ({
                   ...p,
                   id: Number(p.id),
@@ -1768,7 +1970,7 @@
               const total = Number(totalPosts.value || 0);
               if (total <= 0) { posts.value = []; return; }
               const { offset: start, limit } = calcReversePagination(total, currentPageAll.value, POST_PAGE_SIZE);
-              const list = limit > 0 ? await contract.methods.getPosts(start, limit).call() : [];
+              const list = limit > 0 ? await callView(() => contract.methods.getPosts(start, limit).call()) : [];
               posts.value = (list || []).map(p => ({
                 ...p,
                 id: Number(p.id),
@@ -1844,40 +2046,23 @@
 
         async function loadComments(p) {
           if (!contract || !web3) return;
+          if (p._loadingComments) return;
+          if (p._lastCommentsAt && (Date.now() - p._lastCommentsAt) < 10000) return; // 10s throttle per post
           try {
             p._loadingComments = true;
-            // Query past events for this postId (chunked to avoid provider max block range limits)
-            const eventAbi = getEventAbi('Comment');
-            const signature = web3.eth.abi.encodeEventSignature(eventAbi);
-            let topicPostId = web3.utils.padLeft(web3.utils.numberToHex(p.id), 64);
-            if (!topicPostId.startsWith('0x')) { topicPostId = '0x' + topicPostId; }
-
-            // use shared constants
-            const MAX_LOG_RANGE = LOG_MAX_RANGE; // less than provider max range
-            const DEFAULT_SEARCH_DEPTH = EVENT_SEARCH_DEPTH; // search recent N blocks; adjustable
-            const latest = await web3.eth.getBlockNumber();
-            const start = Math.max(0, latest - DEFAULT_SEARCH_DEPTH);
-
-            let logs = [];
-            for (let fromBlock = start; fromBlock <= latest; ) {
-              const toBlock = Math.min(latest, fromBlock + MAX_LOG_RANGE - 1);
-              const chunk = await web3.eth.getPastLogs({
-                fromBlock,
-                toBlock,
-                address: contract.options.address,
-                topics: [signature, null, topicPostId]
-              });
-              logs = logs.concat(chunk);
-              fromBlock = toBlock + 1;
-            }
-
-            const parsed = logs.map(l => web3.eth.abi.decodeLog(eventAbi.inputs, l.data, l.topics.slice(1)));
-            p._comments = parsed.map(x => ({
-              commenter: x.commenter,
-              postId: Number(x.postId),
-              content: x.content,
-              timestamp: Number(x.timestamp)
-            })).sort((a,b) => b.timestamp - a.timestamp);
+            const fid = web3.utils.toBN(p.id).toString(10);
+            const events = await syncEventsCached('Comment', { filter: { postId: fid } }, BLOG_DEPLOY_BLOCK);
+            const parsed = (events || []).map(ev => {
+              const x = ev.returnValues || {};
+              return {
+                commenter: x.commenter,
+                postId: Number(x.postId),
+                content: x.content,
+                timestamp: Number(x.timestamp)
+              };
+            }).sort((a,b) => b.timestamp - a.timestamp);
+            p._comments = parsed;
+            p._lastCommentsAt = Date.now();
           } catch (e) {
             console.error('loadComments error', e);
           } finally {
@@ -1981,7 +2166,7 @@
         async function initRank() {
           try {
             ensureReadOnly();
-            rankTotal.value = Number(await contract.methods.getAuthorsTotal().call());
+            rankTotal.value = Number(await callView(() => contract.methods.getAuthorsTotal().call()));
                         currentRankPage.value = 1;
             await loadRankPage();
           } catch (e) { console.error('initRank error', e); }
@@ -1997,7 +2182,7 @@
             const limit = Math.max(0, Math.min(size, Number(rankTotal.value || 0) - offset));
             let addrs = [], counts = [];
             if (limit > 0) {
-              const res = await contract.methods.getAuthorsRank(offset, limit).call();
+              const res = await callView(() => contract.methods.getAuthorsRank(offset, limit).call());
                             if (Array.isArray(res) && res.length === 2) {
                 addrs = res[0]; counts = res[1];
               } else {
@@ -2037,71 +2222,83 @@
           if (!contract || !web3) return;
           try {
             loadingMoreDraw.value = true;
-            const eventAbi = getEventAbi('NFTDrawn');
-            const signature = web3.eth.abi.encodeEventSignature(eventAbi);
-            const MAX_LOG_RANGE = LOG_MAX_RANGE;
-
-            let page = [];
-            while (page.length < drawPageSize.value && drawScanCursor.value >= drawScanEnd.value) {
-              const toBlock = drawScanCursor.value;
-              const fromBlock = Math.max(drawScanEnd.value, toBlock - MAX_LOG_RANGE + 1);
-              const chunk = await web3.eth.getPastLogs({ fromBlock, toBlock, address: contract.options.address, topics: [signature] });
-              const parsed = chunk.map(l => {
-                const d = web3.eth.abi.decodeLog(eventAbi.inputs, l.data, l.topics.slice(1));
-                return { user: d.user, tokenId: Number(d.tokenId), prizeName: d.prizeName, uri: d.uri, timestamp: Number(d.timestamp), blockNumber: l.blockNumber, tx: l.transactionHash };
-              }).sort((a,b) => b.blockNumber - a.blockNumber);
-
-              for (const rec of parsed) {
-                if (page.length < drawPageSize.value) page.push(rec);
-              }
-
-              drawScanCursor.value = fromBlock - 1;
-            }
-
-            // resolve image urls for each record
+            // Use cached incremental sync
+            const events = await syncEventsCached('NFTDrawn', {}, BLOG_DEPLOY_BLOCK);
+            const all = (events || []).map(ev => {
+              const d = ev.returnValues || {};
+              return { user: d.user, tokenId: Number(d.tokenId), prizeName: d.prizeName, uri: d.uri, timestamp: Number(d.timestamp), blockNumber: ev.blockNumber, tx: ev.transactionHash };
+            }).sort((a,b) => b.blockNumber - a.blockNumber);
+            const start = drawRecords.value.length;
+            const size = Number(drawPageSize.value || 20);
+            const page = all.slice(start, start + size);
             const imgs = await Promise.all(page.map(r => resolvePrizeImage(r.uri)));
             for (let i = 0; i < page.length; i++) {
               page[i]._imageUrl = imgs[i] || '';
               page[i]._imgErr = false;
               page[i]._retried = false;
             }
-
             drawRecords.value = drawRecords.value.concat(page);
-            hasMoreDraw.value = drawScanCursor.value >= drawScanEnd.value;
+            hasMoreDraw.value = all.length > drawRecords.value.length;
           } catch (e) {
             console.error('loadMoreDrawRecords error', e);
           } finally { loadingMoreDraw.value = false; }
         }
 
         async function loadNFTs() {
-          if (!account.value || !contract) { nfts.value = []; return; }
+          // Paged, cached NFT loader
+          const addr = account.value;
+          if (!addr || !contract) { nfts.value = []; _nftTokenIds.value = []; return; }
           try {
-            const tokenIds = await contract.methods.getOwnedTokens(account.value).call();
+            ensureReadOnly();
+            // 1) Read cache
+            let cache = readNftCache(addr);
+
+            // 2) Offline mode: DO NOT call getOwnedTokens; rely solely on cached/externally provided tokenIds
+            let tokenIds = (cache.tokenIds || []).map(Number);
+
+            // 3) Sort desc and update paging index
+            tokenIds = (tokenIds || []).map(Number).sort((a, b) => b - a);
+            _nftTokenIds.value = tokenIds;
+
+            // 4) Compute current page slice
+            const pageSize = Number(nftPageSize.value || NFT_PAGE_SIZE);
+            const total = tokenIds.length;
+            const pages = Math.max(1, Math.ceil(total / Math.max(1, pageSize)));
+            if (nftPage.value > pages) nftPage.value = pages;
+            const p = Math.max(1, Math.min(nftPage.value, pages));
+            const end = p * pageSize;
+            const start = Math.max(0, end - pageSize);
+            const slice = tokenIds.slice(start, end);
+
+            // 5) Build page list using cache first, then fill gaps
             const list = [];
-            for (const tid of tokenIds) {
-              const rawURI = await contract.methods.tokenURI(tid).call();
-              const uriResolved = resolveUrl(rawURI);
-              let metadata = parseTokenMetadata(rawURI);
-
-              if (!metadata && uriResolved && uriResolved.startsWith('http')) {
+            for (const tid of slice) {
+              let entry = cache.meta && cache.meta[tid];
+              if (!entry && !isRpcPaused()) {
                 try {
-                  const resp = await fetch(uriResolved, { mode: 'cors' });
-                  if (resp.ok) {
-                    metadata = await resp.json();
+                  await sleep(120);
+                  const rawURI = await callView(() => contract.methods.tokenURI(tid).call());
+                  const uriResolved = resolveUrl(rawURI);
+                  let metadata = parseTokenMetadata(rawURI);
+                  if (!metadata && uriResolved && uriResolved.startsWith('http')) {
+                    try {
+                      const resp = await fetch(uriResolved, { mode: 'cors' });
+                      if (resp.ok) metadata = await resp.json();
+                    } catch (err) { console.warn('fetch metadata failed', uriResolved, err); }
                   }
-                } catch (err) {
-                  console.warn('fetch metadata failed', uriResolved, err);
-                }
+                  let imageUrl = '';
+                  if (metadata && metadata.image) imageUrl = resolveUrl(metadata.image);
+                  entry = { tokenURI: rawURI, uriResolved, metadata, imageUrl };
+                  cache.meta = cache.meta || {};
+                  cache.meta[tid] = entry;
+                  writeNftCache(addr, cache);
+                } catch (e) { console.warn('tokenURI failed for', tid, e); }
               }
-
-              let imageUrl = '';
-              if (metadata && metadata.image) {
-                imageUrl = resolveUrl(metadata.image);
-              }
-
-              list.push({ tokenId: Number(tid), tokenURI: rawURI, uriResolved, metadata, imageUrl });
+              const e2 = entry || { tokenURI: '', uriResolved: '', metadata: null, imageUrl: '' };
+              list.push({ tokenId: Number(tid), tokenURI: e2.tokenURI, uriResolved: e2.uriResolved, metadata: e2.metadata, imageUrl: e2.imageUrl });
             }
-            nfts.value = list.sort((a, b) => b.tokenId - a.tokenId);
+
+            nfts.value = list;
           } catch (e) { console.error('loadNFTs error', e); }
         }
 
@@ -2116,6 +2313,73 @@
           } catch (e) {
             console.warn('loadPrizeImages error', e);
           }
+        }
+
+        // NFT cache helpers (per chain + contract + account)
+        function nftCacheKey(addr) {
+          const chain = String(networkId.value || TARGET_CHAIN_ID);
+          const c = contract && contract.options && contract.options.address ? contract.options.address : BLOG_ADDRESS;
+          return `nft_cache_${chain}_${c}_${(addr||'').toLowerCase()}`;
+        }
+        function readNftCache(addr) {
+          try {
+            const raw = localStorage.getItem(nftCacheKey(addr));
+            if (!raw) return { tokenIds: [], meta: {}, ts: 0 };
+            const obj = JSON.parse(raw);
+            return { tokenIds: obj.tokenIds || [], meta: obj.meta || {}, ts: obj.ts || 0 };
+          } catch { return { tokenIds: [], meta: {}, ts: 0 }; }
+        }
+        function writeNftCache(addr, data) {
+          try {
+            localStorage.setItem(nftCacheKey(addr), JSON.stringify({ tokenIds: data.tokenIds || [], meta: data.meta || {}, ts: Date.now() }));
+          } catch (_) {}
+        }
+        function clearNftCache(addr) {
+          try { localStorage.removeItem(nftCacheKey(addr)); } catch (_) {}
+        }
+        function shallowEqualArray(a, b) {
+          if (!Array.isArray(a) || !Array.isArray(b)) return false;
+          if (a.length !== b.length) return false;
+          for (let i = 0; i < a.length; i++) if (String(a[i]) !== String(b[i])) return false;
+          return true;
+        }
+        // Offline injection helpers
+        function setOfflineOwnedTokenIds(ids) {
+          const addr = account.value;
+          if (!addr) return;
+          if (!Array.isArray(ids)) return;
+          const norm = ids.map(x => Number(x)).filter(x => Number.isFinite(x));
+          const cache = readNftCache(addr);
+          cache.tokenIds = Array.from(new Set(norm));
+          // Drop meta that no longer exist
+          const keep = {};
+          for (const tid of cache.tokenIds) if (cache.meta && cache.meta[tid]) keep[tid] = cache.meta[tid];
+          cache.meta = keep;
+          writeNftCache(addr, cache);
+          // reset to first page and reload
+          nftPage.value = 1;
+          _nftTokenIds.value = cache.tokenIds.slice().sort((a,b)=>b-a);
+          loadNFTs();
+        }
+        function setOfflineNftMeta(metaMap) {
+          const addr = account.value;
+          if (!addr) return;
+          if (!metaMap || typeof metaMap !== 'object') return;
+          const cache = readNftCache(addr);
+          cache.meta = cache.meta || {};
+          for (const k of Object.keys(metaMap)) {
+            const tid = Number(k);
+            if (!Number.isFinite(tid)) continue;
+            const m = metaMap[k] || {};
+            cache.meta[tid] = {
+              tokenURI: m.tokenURI || cache.meta[tid]?.tokenURI || '',
+              uriResolved: m.uriResolved || cache.meta[tid]?.uriResolved || '',
+              metadata: m.metadata || cache.meta[tid]?.metadata || null,
+              imageUrl: m.imageUrl || cache.meta[tid]?.imageUrl || ''
+            };
+          }
+          writeNftCache(addr, cache);
+          loadNFTs();
         }
 
         // Strip CDN style suffix like `!dp6` that may break hotlinking/proxying
@@ -2469,6 +2733,9 @@
           window.open(`${CHAIN_explorer}/address/${addr}`, "_blank");
         }
 
+        function prevNftPage() { if (nftPage.value > 1) { nftPage.value--; loadNFTs(); } }
+        function nextNftPage() { if (nftPage.value < nftTotalPages.value) { nftPage.value++; loadNFTs(); } }
+
         return { account, connecting, connect, refreshMine, networkDesc, short, blogAddress,
                  // Wallet management
                  walletMode, showWalletModal, showWalletSettings, localWallet,
@@ -2487,6 +2754,10 @@
                  // profile view/edit
                  editingProfile, editProfile, startEditProfile, cancelEditProfile,
                  viewAvatarErr, editAvatarErr, saveProfile, savingProfile,
+                 // nft paging
+                 nftPage, nftTotalPages, hasPrevNft, hasNextNft, prevNftPage, nextNftPage,
+                 // nft offline helpers
+                 setOfflineOwnedTokenIds, setOfflineNftMeta, clearNftCache,
                  // utils
                  copy, displayImageUrl, resolveUrl, explorerTx,goToExplorer,
                  // content modal
