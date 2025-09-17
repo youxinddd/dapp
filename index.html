@@ -1583,16 +1583,22 @@
         }
 
         // Retry wrapper for view/event calls with backoff and jitter
-        async function withRetry(fn, _opts = {}) {
-          try { return await fn(); }
-          catch (e) {
-            const msg = String(e && (e.message || e)).toLowerCase();
-            const transient = msg.includes('server is busy') || msg.includes('rate limit') || msg.includes('429') || msg.includes('timeout') || msg.includes('timed out') || msg.includes('temporarily') || msg.includes('over compute unit');
-            if (transient) {
-              // Immediately pause further RPCs for this session
-              pauseRpcForever();
+        async function withRetry(fn, opts = {}) {
+          const retries = Number(opts.retries ?? 0);
+          const delayMs = Number(opts.delayMs ?? 1000);
+          let attempt = 0;
+          while (attempt <= retries) {
+            try {
+              return await fn();
+            } catch (e) {
+              const msg = String(e && (e.message || e)).toLowerCase();
+              const transient = msg.includes('server is busy') || msg.includes('rate limit') || msg.includes('429') || msg.includes('too many requests') || msg.includes('timeout') || msg.includes('timed out') || msg.includes('temporarily') || msg.includes('over compute unit');
+              const canRetry = transient && attempt < retries;
+              if (!canRetry) throw e;
+              await sleep(delayMs);
+              attempt++;
+              continue;
             }
-            throw e;
           }
         }
 
@@ -1635,14 +1641,15 @@
           return key;
         }
         async function getLatestBlockSafe() { return await scheduleView(() => withRetry(() => web3.eth.getBlockNumber())); }
-        async function fetchEventsChunked(eventName, options, fromBlock, toBlock, step = 80000, maxChunks = MAX_CHUNKS_PER_SYNC) {
+        async function fetchEventsChunked(eventName, options, fromBlock, toBlock, step = 100000, maxChunks = MAX_CHUNKS_PER_SYNC) {
           let out = [];
           let chunks = 0;
           let lastProcessed = fromBlock - 1;
           for (let start = fromBlock; start <= toBlock; start += step) {
             if (chunks >= maxChunks) break;
             const end = Math.min(start + step - 1, toBlock);
-            const evs = await scheduleView(() => withRetry(() => contract.getPastEvents(eventName, { ...options, fromBlock: start, toBlock: end })));
+            const evs = await scheduleView(() => withRetry(() => contract.getPastEvents(eventName, { ...options, fromBlock: start, toBlock: end }), { retries: 4, delayMs: 3000 }));
+            consolel.log(evs)
             if (Array.isArray(evs) && evs.length) out = out.concat(evs);
             lastProcessed = end;
             chunks++;
@@ -1694,7 +1701,7 @@
               return cached;
             }
             try {
-              const { events: newEvents, lastProcessed } = await fetchEventsChunked(eventName, options, lastBlock + 1, latest, 80000, MAX_CHUNKS_PER_SYNC);
+              const { events: newEvents, lastProcessed } = await fetchEventsChunked(eventName, options, lastBlock + 1, latest, 100000, MAX_CHUNKS_PER_SYNC);
               if (Array.isArray(newEvents) && newEvents.length) {
                 cached = cached.concat(newEvents);
                 if (cached.length > EVENTS_CACHE_MAX) cached = cached.slice(cached.length - EVENTS_CACHE_MAX);
