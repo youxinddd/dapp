@@ -243,7 +243,6 @@
       <div class="between mb12">
         <h3>中奖记录</h3>
         <div class="flex">
-          <button class="secondary" @click="initDrawRecords" :disabled="loadingMoreDraw">刷新</button>
           <button class="secondary" @click="closeDrawRecords">关闭</button>
         </div>
       </div>
@@ -274,7 +273,7 @@
       </div>
       </div>
       <div class="between" style="margin-top:8px;">
-        <button class="secondary" @click="loadMoreDrawRecords" :disabled="loadingMoreDraw || !hasMoreDraw">{{ loadingMoreDraw ? '加载中...' : (hasMoreDraw ? '加载更多' : '没有更多了') }}</button>
+        <button class="secondary" v-if="hasMoreDraw || loadingMoreDraw || drawRecords.length===0" @click="loadMoreDrawRecords" :disabled="loadingMoreDraw || drawCooldownActive">{{ loadingMoreDraw ? '加载中...' : '加载更多' }}</button>
       </div>
     </div>
   </div>
@@ -654,6 +653,9 @@
                   </div>
                   <div>{{ c.content }}</div>
                 </div>
+                <div class="between" style="margin-top:6px;">
+                  <button class="secondary" v-if="p._hasMoreComments || p._loadingComments || (!p._comments || p._comments.length===0)" @click="loadMoreComments(p)" :disabled="p._loadingComments || p._cCooldownActive">{{ p._loadingComments ? '加载中...' : '加载更多评论' }}</button>
+                </div>
               </div>
             </div>
           </div>
@@ -739,10 +741,9 @@
           <div v-if="nfts.length===0" class="small muted">暂无持有</div>
         </div>
         <div class="between" style="margin-top:8px;">
-          <div class="small muted">第 {{ nftPage }} / {{ nftTotalPages }} 页</div>
+          <div class="small muted">已加载 {{ nfts.length }} 个</div>
           <div class="flex" style="gap:6px;">
-            <button class="secondary" @click="prevNftPage" :disabled="!hasPrevNft">上一页</button>
-            <button class="secondary" @click="nextNftPage" :disabled="!hasNextNft">下一页</button>
+            <button class="secondary" v-if="nftHasMore || nftLoadingMore || nfts.length===0" @click="loadMoreNfts" :disabled="nftLoadingMore || nftCooldownActive">{{ nftLoadingMore ? '加载中...' : '加载更多 NFT' }}</button>
           </div>
         </div>
       </div>
@@ -958,14 +959,13 @@
     
     const { createApp, ref, reactive, onMounted } = Vue;
 
-    // Configurable event query constants
-    const LOG_MAX_RANGE = 15000;       
-    const EVENT_SEARCH_DEPTH = 5000000; 
+    // Configurable constants
     const POST_PAGE_SIZE = 10;        
     const BLOG_DEPLOY_BLOCK = 12852339; 
     // NFT paging defaults
     const NFT_PAGE_SIZE = 24; // default items per page
-    const NFT_BATCH_SIZE = 100; // reserved for future batch requests 
+    const DRAW_SCAN_STEP = 100000; // 每次查询的区块数量
+    const DRAW_QUERY_GAP_MS = 3000; // 两次查询的最小间隔
 
     function tryDecodeContent(raw) {
       if (!raw) return raw;
@@ -1221,24 +1221,34 @@
         const drawPageSize = ref(20);
         const hasMoreDraw = ref(false);
         const loadingMoreDraw = ref(false);
+        const lastDrawQueryAt = ref(0);
+        const drawCooldownActive = ref(false);
         const viewAvatarErr = ref(false);
         const editAvatarErr = ref(false);
         const editingProfile = ref(false);
         const editProfile = reactive({ nickname: '', avatar: '', bio: '' });
-        // NFT paging state and cache index
-        const nftPage = ref(1);
-        const nftPageSize = ref(NFT_PAGE_SIZE);
+        // NFT scan state (no pagination)
         const _nftTokenIds = ref([]);
-        const nftTotalPages = Vue.computed(() => Math.max(1, Math.ceil(Number((_nftTokenIds.value || []).length || 0) / Number(nftPageSize.value || NFT_PAGE_SIZE))));
-        const hasPrevNft = Vue.computed(() => nftPage.value > 1);
-        const hasNextNft = Vue.computed(() => nftPage.value < nftTotalPages.value);
+        const nftScanCursor = ref(0);
+        const nftScanEnd = ref(0);
+        const nftHasMore = ref(false);
+        const nftLoadingMore = ref(false);
+        const lastNftQueryAt = ref(0);
+        const nftCooldownActive = ref(false);
+        const nftMetaCache = ref({});
         // edit modal state
         const showEditModal = ref(false);
         const editingPost = reactive({ id: null, title: '', content: '', url: '' });
         const editSubmitting = ref(false);
         const showCreateModal = ref(false);
         const activeTab = ref('posts');
-        function setActiveTab(t) { activeTab.value = t; }
+        function setActiveTab(t) {
+          activeTab.value = t;
+          // 首次进入“我的资料”时，初始化并触发一次扫描
+          if (t === 'profile' && account.value && !nftScanCursor.value) {
+            (async () => { try { await initNfts(); await loadMoreNfts(); } catch (e) { console.warn('init/load nfts on tab switch failed', e); } })();
+          }
+        }
 
         // Wallet management
         const walletMode = ref(''); // 'local' or 'metamask'
@@ -1411,15 +1421,15 @@
 
         function disconnect() {
           // clear local view/state
-          if (account.value) {
-            try { clearNftCache(account.value); } catch (_) {}
-          }
           account.value = '';
           walletMode.value = '';
           localWallet.value = null;
+          // 重置我的NFT扫描状态（移除旧分页逻辑）
           nfts.value = [];
           _nftTokenIds.value = [];
-          nftPage.value = 1;
+          nftScanCursor.value = 0;
+          nftScanEnd.value = 0;
+          nftHasMore.value = false;
           showWalletSettings.value = false;
           if (web3 && web3.eth.accounts.wallet) {
             web3.eth.accounts.wallet.clear();
@@ -1428,72 +1438,66 @@
         }
 
         async function sendTransactionSafe(method, from) {
-          const MAX_RETRY = 10;
-          let attempt = 0;
-          const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+          // Build a robust tx for MegaETH: set chainId, use EIP-1559 fees if available, estimate gas with safety margin
+          const chainId = Number(networkId.value || TARGET_CHAIN_ID || 0) || TARGET_CHAIN_ID;
+          const to = contract.options.address;
 
-          // 基于网络建议价格，稍作上浮
-          let gasPrice;
+          // 1) Nonce
+          const nonce = await web3.eth.getTransactionCount(from, 'pending').catch(async () => {
+            return await web3.eth.getTransactionCount(from, 'latest');
+          });
+
+          // 2) Gas limit with safety margin
+          let gasLimit;
           try {
-            const base = await web3.eth.getGasPrice();
-            gasPrice = (BigInt(base) + BigInt(web3.utils.toWei('0.02', 'gwei'))).toString();
+            const est = await method.estimateGas({ from });
+            gasLimit = Math.ceil(Number(est) * 1.2);
           } catch {
-            gasPrice = web3.utils.toWei('0.06', 'gwei');
+            // Fallback large enough for our contract methods
+            gasLimit = 500000;
           }
 
-          // 不跳号：初始严格使用 pendingNonce，只有在收到 nonce too low 后才递增
-          let useNonce = null;
-
-          while (attempt < MAX_RETRY) {
-            try {
-              const pendingNonce = await web3.eth.getTransactionCount(from, 'pending').catch(async () => {
-                return await web3.eth.getTransactionCount(from, 'latest');
-              });
-              if (useNonce === null) useNonce = pendingNonce; // 初次使用 pendingNonce
-
-              console.log(`👉 Attempt ${attempt + 1}`);
-              console.log('   pendingNonce:', pendingNonce, 'useNonce:', useNonce);
-
-              let gasLimit;
-              try { gasLimit = await method.estimateGas({ from }); }
-              catch { gasLimit = 150000; }
-
-              const tx = {
-                from,
-                to: contract.options.address,
-                data: method.encodeABI(),
-                gas: gasLimit,
-                gasPrice,
-                nonce: useNonce,
+          // 3) Fees: prefer EIP-1559 if baseFeePerGas is present
+          let feeFields = {};
+          try {
+            const blk = await web3.eth.getBlock('pending');
+            const base = blk && blk.baseFeePerGas ? BigInt(blk.baseFeePerGas) : null;
+            if (base !== null) {
+              const tip = BigInt(web3.utils.toWei('0.2', 'gwei')); // 0.2 gwei priority tip
+              const maxPriorityFeePerGas = tip > 0n ? tip : 1n;
+              const maxFeePerGas = base * 2n + maxPriorityFeePerGas;
+              feeFields = {
+                maxFeePerGas: maxFeePerGas.toString(),
+                maxPriorityFeePerGas: maxPriorityFeePerGas.toString(),
+                // type is inferred by presence of EIP-1559 fee fields
               };
-              console.log('🚀 Sending tx:', tx);
-
-              const signedTx = await web3.eth.accounts.signTransaction(tx, localWallet.value.privateKey);
-              const receipt = await web3.eth.sendSignedTransaction(signedTx.rawTransaction);
-              console.log('✅ Success:', receipt.transactionHash);
-              return receipt;
-            } catch (err) {
-              const msg = (err && (err.message || String(err))).toLowerCase();
-              console.warn('⚠️ sendTransaction error:', msg);
-
-              if (msg.includes('nonce too low')) {
-                // 仅在明确 nonce too low 时递增本地待用 nonce
-                useNonce = (useNonce === null ? 0 : useNonce) + 1;
-                // 指数回退：200ms, 400ms, 800ms ...
-                await sleep(200 * Math.pow(2, attempt));
-              } else if (msg.includes('replacement transaction underpriced') || msg.includes('underpriced')) {
-                // 抬价 0.01 gwei 并退避
-                try { gasPrice = (BigInt(gasPrice) + BigInt(web3.utils.toWei('0.01', 'gwei'))).toString(); } catch {}
-                await sleep(200 * Math.pow(2, attempt));
-              } else if (msg.includes('already known') || msg.includes('known transaction')) {
-                throw err; // 交由上层处理
-              } else {
-                throw err;
-              }
+            } else {
+              const gp = await web3.eth.getGasPrice();
+              // slight bump
+              const gasPrice = (BigInt(gp) + BigInt(web3.utils.toWei('0.02', 'gwei'))).toString();
+              feeFields = { gasPrice };
             }
-            attempt++;
+          } catch {
+            const gp = await web3.eth.getGasPrice().catch(() => web3.utils.toWei('0.06', 'gwei'));
+            feeFields = { gasPrice: gp };
           }
-          throw new Error('❌ Failed to send transaction after retries');
+
+          // 4) Assemble tx
+          const tx = {
+            from,
+            to,
+            data: method.encodeABI(),
+            gas: gasLimit,
+            nonce,
+            chainId,
+            value: '0x0',
+            ...feeFields,
+          };
+
+          // 5) Sign and send
+          const signedTx = await web3.eth.accounts.signTransaction(tx, localWallet.value.privateKey);
+          const receipt = await web3.eth.sendSignedTransaction(signedTx.rawTransaction);
+          return receipt;
         }
 
         // Modified send transaction function to handle both wallet modes
@@ -1550,184 +1554,16 @@
         // Simple sleep utility for pacing RPC calls
         function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-        // Safe log query that splits ranges and backs off on provider limits
-        async function getPastLogsSafe({ fromBlock, toBlock, address, topics }) {
-          let from = Number(fromBlock);
-          const to = Number(toBlock);
-          let seg = Math.min(Number(LOG_MAX_RANGE || 15000), Math.max(1, to - from + 1));
-          const minSeg = 2000;
-          const out = [];
-          let backoff = 200;
-          while (from <= to) {
-            const end = Math.min(to, from + seg - 1);
-            try {
-              const chunk = await web3.eth.getPastLogs({ fromBlock: from, toBlock: end, address, topics });
-              if (Array.isArray(chunk) && chunk.length) out.push(...chunk);
-              from = end + 1;
-              // slight ramp-up if stable
-              if (seg < Number(LOG_MAX_RANGE || 15000)) seg = Math.min(Number(LOG_MAX_RANGE || 15000), Math.floor(seg * 1.25));
-              backoff = 200;
-            } catch (e) {
-              const msg = String(e && (e.message || e)).toLowerCase();
-              const transient = msg.includes('429') || msg.includes('rate limit') || msg.includes('server is busy') || msg.includes('over compute unit') || msg.includes('timeout') || msg.includes('timed out');
-              if (transient) {
-                if (seg > minSeg) seg = Math.max(minSeg, Math.floor(seg / 2));
-                await sleep(backoff);
-                backoff = Math.min(2000, Math.floor(backoff * 1.5));
-                continue;
-              }
-              throw e;
-            }
-          }
-          return out;
-        }
+        
+        // Retry removed for view/event calls
+        async function withRetry(fn) { return await fn(); }
 
-        // Retry wrapper for view/event calls with backoff and jitter
-        async function withRetry(fn, opts = {}) {
-          const retries = Number(opts.retries ?? 0);
-          const delayMs = Number(opts.delayMs ?? 1000);
-          let attempt = 0;
-          while (attempt <= retries) {
-            try {
-              return await fn();
-            } catch (e) {
-              const msg = String(e && (e.message || e)).toLowerCase();
-              const transient = msg.includes('server is busy') || msg.includes('rate limit') || msg.includes('429') || msg.includes('too many requests') || msg.includes('timeout') || msg.includes('timed out') || msg.includes('temporarily') || msg.includes('over compute unit');
-              const canRetry = transient && attempt < retries;
-              if (!canRetry) throw e;
-              await sleep(delayMs);
-              attempt++;
-              continue;
-            }
-          }
-        }
+        // View-call scheduler removed
+        function isRpcPaused() { return false; }
+        function scheduleView(fn) { return fn(); }
+        function callView(fn) { return fn(); }
 
-        // Global view-call scheduler to avoid bursts (serializes view calls and enforces min gap)
-        const MIN_VIEW_GAP = 300; // ms between RPC calls
-        const viewQueue = { p: Promise.resolve(), last: 0 };
-        // Global pause switch: once paused, no more RPC view calls in this session
-        let RPC_PAUSED = false;
-        function isRpcPaused() { return RPC_PAUSED; }
-        function pauseRpcForever() { RPC_PAUSED = true; console.warn('RPC paused due to prior error'); }
-        function resumeRpc() { RPC_PAUSED = false; }
-        function scheduleView(fn) {
-          if (isRpcPaused()) return Promise.reject(new Error('RPC paused'));
-          const run = async () => {
-            if (isRpcPaused()) throw new Error('RPC paused');
-            const now = Date.now();
-            const since = now - (viewQueue.last || 0);
-            if (since < MIN_VIEW_GAP) {
-              await sleep(MIN_VIEW_GAP - since);
-            }
-            if (isRpcPaused()) throw new Error('RPC paused');
-            const res = await fn();
-            viewQueue.last = Date.now();
-            return res;
-          };
-          // chain to guarantee serialization
-          viewQueue.p = viewQueue.p.then(run, run);
-          return viewQueue.p;
-        }
-        function callView(fn) { return scheduleView(() => withRetry(fn)); }
-
-        // Event cache helpers (incremental sync to reduce RPC load)
-        const EVENTS_CACHE_MAX = 10000;
-        const MAX_CHUNKS_PER_SYNC = 9999; // cap per-run budget; allow deep scans with 1s interval
-        const EVENT_SYNC_MIN_GAP = 10000; // min ms between two syncs for same key
-        const eventSyncState = {}; // { [key]: { promise, lastSyncAt, cooldownUntil } }
-        function buildEventCacheKey(eventName, options = {}) {
-          let key = `${BLOG_ADDRESS}_${eventName}`;
-          if (options && options.filter && options.filter.postId != null) key += `_post_${options.filter.postId}`;
-          return key;
-        }
-        async function getLatestBlockSafe() { return await scheduleView(() => withRetry(() => web3.eth.getBlockNumber())); }
-        async function fetchEventsChunked(eventName, options, fromBlock, toBlock, step = 100000, maxChunks = MAX_CHUNKS_PER_SYNC) {
-          let out = [];
-          let chunks = 0;
-          let lastProcessed = fromBlock - 1;
-          for (let start = fromBlock; start <= toBlock; start += step) {
-            if (chunks >= maxChunks) break;
-            const end = Math.min(start + step - 1, toBlock);
-            const evs = await scheduleView(() => withRetry(() => contract.getPastEvents(eventName, { ...options, fromBlock: start, toBlock: end }), { retries: 4, delayMs: 3000 }));
-            consolel.log(evs)
-            if (Array.isArray(evs) && evs.length) out = out.concat(evs);
-            lastProcessed = end;
-            chunks++;
-            await sleep(1000);
-          }
-          return { events: out, lastProcessed };
-        }
-        async function syncEventsCached(eventName, options = {}, deployBlock = BLOG_DEPLOY_BLOCK) {
-          const key = buildEventCacheKey(eventName, options);
-          const storageKey = `events_${key}`;
-          const blockKey = `lastBlock_${key}`;
-          let cached = [];
-          try { cached = JSON.parse(localStorage.getItem(storageKey) || '[]'); } catch (_) { cached = []; }
-          let lastBlock = 0;
-          try { lastBlock = parseInt(localStorage.getItem(blockKey) || '0'); } catch (_) { lastBlock = 0; }
-
-          // If globally paused, return cached immediately without any network calls
-          if (isRpcPaused()) {
-            return cached;
-          }
-
-          const now = Date.now();
-          const state = (eventSyncState[key] = eventSyncState[key] || { promise: null, lastSyncAt: 0, cooldownUntil: 0 });
-          if (now < state.cooldownUntil) {
-            return cached; // cooldown: skip network
-          }
-          // de-duplicate concurrent syncs
-          if (state.promise) {
-            try { await state.promise; } catch (_) {}
-            return cached;
-          }
-
-          const doSync = async () => {
-            const latest = await getLatestBlockSafe();
-            let startFrom = 0;
-            if (deployBlock && deployBlock > 0 && deployBlock <= latest) {
-              startFrom = deployBlock;
-            } else {
-              // deployBlock missing or beyond latest: scan from genesis
-              startFrom = 0;
-            }
-            if (lastBlock < startFrom - 1) lastBlock = startFrom - 1;
-            // throttle frequent syncs
-            if (now - state.lastSyncAt < EVENT_SYNC_MIN_GAP) {
-              return cached;
-            }
-            if (lastBlock >= latest) {
-              state.lastSyncAt = now;
-              return cached;
-            }
-            try {
-              const { events: newEvents, lastProcessed } = await fetchEventsChunked(eventName, options, lastBlock + 1, latest, 100000, MAX_CHUNKS_PER_SYNC);
-              if (Array.isArray(newEvents) && newEvents.length) {
-                cached = cached.concat(newEvents);
-                if (cached.length > EVENTS_CACHE_MAX) cached = cached.slice(cached.length - EVENTS_CACHE_MAX);
-              }
-              // advance progress up to lastProcessed only
-              if (lastProcessed >= lastBlock) {
-                lastBlock = lastProcessed;
-                try {
-                  localStorage.setItem(storageKey, JSON.stringify(cached));
-                  localStorage.setItem(blockKey, String(lastBlock));
-                } catch (_) {}
-              }
-              state.lastSyncAt = Date.now();
-              return cached;
-            } catch (e) {
-              // on rate limit, enter cooldown and return cached
-              state.cooldownUntil = Date.now() + EVENT_SYNC_MIN_GAP;
-              return cached;
-            }
-          };
-
-          state.promise = doSync();
-          try { await state.promise; } finally { state.promise = null; }
-          return cached;
-        }
-
+                                        
         function registerProviderListeners() {
           // 仅在 MetaMask 模式下注册 provider 监听
           if (walletMode.value !== 'metamask') return;
@@ -1898,8 +1734,10 @@
               profile.avatar = prof[0].avatar;
               profile.bio = prof[0].bio;
               points.value = Number(prof[1]);
+              // 刷新资料时，同时刷新我的NFT：重置扫描并回溯加载一段
+              await initNfts();
+              await loadMoreNfts();
             }
-            await loadNFTs();
           } catch (e) {
             console.error('refreshMine error', e);
           }
@@ -1908,7 +1746,6 @@
         async function loadAll() {
           if (!contract) return;
           if (loadingAll.value) return;
-          if (Date.now() - (lastLoadAllAt.value || 0) < 4000) return; // de-dupe rapid triggers
           loadingAll.value = true;
           try {
             // total posts
@@ -1942,12 +1779,10 @@
               ttTokenAddress.value = '';
             }
 
-            // my NFTs
-            await loadNFTs();
+            // my NFTs: 按需在“我的资料”页中扫描加载
           } catch (e) {
             console.error('loadAll error', e);
           } finally {
-            lastLoadAllAt.value = Date.now();
             loadingAll.value = false;
           }
         }
@@ -1970,7 +1805,7 @@
                   commenterCount: Number(p.commenterCount),
                   timestamp: Number(p.timestamp),
                   decodedContent: tryDecodeContent(p.content),
-                  _comment: '', _showComments: false, _comments: [], _loadingComments: false, _imgErr: false, _commenting: false, _retried: false,
+                  _comment: '', _showComments: false, _comments: [], _loadingComments: false, _hasMoreComments: false, _cScanCursor: 0, _cScanEnd: 0, _lastCommentQueryAt: 0, _cCooldownActive: false, _imgErr: false, _commenting: false, _retried: false,
                 })).reverse();
               }
             } else {
@@ -1985,7 +1820,7 @@
                 commenterCount: Number(p.commenterCount),
                 timestamp: Number(p.timestamp),
                 decodedContent: tryDecodeContent(p.content),
-                _comment: '', _showComments: false, _comments: [], _loadingComments: false, _imgErr: false, _commenting: false, _retried: false,
+                _comment: '', _showComments: false, _comments: [], _loadingComments: false, _hasMoreComments: false, _cScanCursor: 0, _cScanEnd: 0, _lastCommentQueryAt: 0, _cCooldownActive: false, _imgErr: false, _commenting: false, _retried: false,
               })).reverse();
             }
           } catch (e) { console.error('loadPosts error', e); }
@@ -2037,7 +1872,7 @@
             const method = contract.methods.comment(p.id, p._comment);
             await sendTransaction(method, account.value);
             p._comment = '';
-            await loadComments(p);
+            initPostComments(p);
           } catch (e) {
             console.error(e);
             alert('评论失败: ' + (e?.message || e));
@@ -2046,34 +1881,100 @@
 
         async function toggleComments(p) {
           p._showComments = !p._showComments;
-          if (p._showComments && (!p._comments || p._comments.length === 0)) {
-            await loadComments(p);
+          if (p._showComments) {
+            if (!p._cScanCursor) {
+              await initPostComments(p);
+            }
+            await loadMoreComments(p);
           }
         }
 
-        async function loadComments(p) {
+        async function initPostComments(p) {
+          try {
+            ensureReadOnly();
+            p._comments = [];
+            const latest = await web3.eth.getBlockNumber();
+            p._cScanCursor = Number(latest);
+            p._cScanEnd = Number(BLOG_DEPLOY_BLOCK > 0 ? BLOG_DEPLOY_BLOCK : 0);
+            p._hasMoreComments = p._cScanCursor > p._cScanEnd;
+            p._lastCommentQueryAt = 0;
+          } catch (e) {
+            console.error('initPostComments error', e);
+            p._hasMoreComments = true; // keep button visible to allow retry
+          }
+        }
+
+        async function onToggleComments(p) {
+          p._showComments = !p._showComments;
+          if (p._showComments) {
+            if (!p._cScanCursor) {
+              await initPostComments(p);
+            }
+            await loadMoreComments(p);
+          }
+        }
+
+        async function loadMoreComments(p) {
+          ensureReadOnly();
           if (!contract || !web3) return;
           if (p._loadingComments) return;
-          if (p._lastCommentsAt && (Date.now() - p._lastCommentsAt) < 10000) return; // 10s throttle per post
           try {
+            const now = Date.now();
+            if (p._lastCommentQueryAt && (now - p._lastCommentQueryAt) < DRAW_QUERY_GAP_MS) { return; }
             p._loadingComments = true;
+
+            let cursor = Number(p._cScanCursor || 0);
+            let endBlock = Number(p._cScanEnd || 0);
+            if (cursor <= endBlock) {
+              if (cursor === 0) {
+                try {
+                  const latest = await web3.eth.getBlockNumber();
+                  p._cScanCursor = Number(latest);
+                  p._cScanEnd = Number(BLOG_DEPLOY_BLOCK > 0 ? BLOG_DEPLOY_BLOCK : 0);
+                  cursor = Number(p._cScanCursor || 0);
+                  endBlock = Number(p._cScanEnd || 0);
+                  p._hasMoreComments = cursor > endBlock;
+                } catch (e) {
+                  p._hasMoreComments = true; // keep button visible for manual retry
+                }
+                if (cursor <= endBlock) {
+                  p._hasMoreComments = false;
+                  return;
+                }
+              } else {
+                p._hasMoreComments = false;
+                return;
+              }
+            }
+            const fromBlock = Math.max(endBlock, cursor - DRAW_SCAN_STEP + 1);
+            const toBlock = cursor;
             const fid = web3.utils.toBN(p.id).toString(10);
-            const events = await syncEventsCached('Comment', { filter: { postId: fid } }, BLOG_DEPLOY_BLOCK);
-            const parsed = (events || []).map(ev => {
+
+            const evs = await contract.getPastEvents('Comment', { filter: { postId: fid }, fromBlock, toBlock });
+            const mapped = (evs || []).map(ev => {
               const x = ev.returnValues || {};
               return {
                 commenter: x.commenter,
                 postId: Number(x.postId),
                 content: x.content,
-                timestamp: Number(x.timestamp)
+                timestamp: Number(x.timestamp),
+                blockNumber: ev.blockNumber,
+                tx: ev.transactionHash
               };
             }).sort((a,b) => b.timestamp - a.timestamp);
-            p._comments = parsed;
-            p._lastCommentsAt = Date.now();
+
+            // 追加结果
+            p._comments = (p._comments || []).concat(mapped);
+            // 成功后推进游标
+            p._cScanCursor = fromBlock - 1;
+            p._hasMoreComments = p._cScanCursor > endBlock;
+            p._lastCommentQueryAt = Date.now();
           } catch (e) {
-            console.error('loadComments error', e);
+            console.error('loadMoreComments error', e);
           } finally {
             p._loadingComments = false;
+            p._cCooldownActive = true;
+            setTimeout(() => { p._cCooldownActive = false; }, DRAW_QUERY_GAP_MS);
           }
         }
 
@@ -2207,6 +2108,7 @@
         async function openDrawRecords() {
           showDrawModal.value = true;
           await initDrawRecords();
+          await loadMoreDrawRecords();
         }
         function closeDrawRecords() { showDrawModal.value = false; }
 
@@ -2214,100 +2116,208 @@
           try {
             ensureReadOnly();
             drawRecords.value = [];
-            const DEFAULT_SEARCH_DEPTH = EVENT_SEARCH_DEPTH; // search depth window
             const latest = await web3.eth.getBlockNumber();
-            drawScanCursor.value = latest;
-            // Use deploy block if provided (>0), otherwise fall back to recent window
-            drawScanEnd.value = BLOG_DEPLOY_BLOCK > 0 ? BLOG_DEPLOY_BLOCK : Math.max(0, latest - DEFAULT_SEARCH_DEPTH);
-            hasMoreDraw.value = true;
-            await loadMoreDrawRecords();
-          } catch (e) { console.error('initDrawRecords error', e); }
+            drawScanCursor.value = Number(latest);
+            // 部署区块作为扫描结束位置
+            drawScanEnd.value = Number(BLOG_DEPLOY_BLOCK > 0 ? BLOG_DEPLOY_BLOCK : 0);
+            hasMoreDraw.value = drawScanCursor.value > drawScanEnd.value;
+            lastDrawQueryAt.value = 0;
+          } catch (e) { console.error('initDrawRecords error', e); hasMoreDraw.value = true; }
         }
 
         async function loadMoreDrawRecords() {
           ensureReadOnly();
           if (!contract || !web3) return;
+          if (loadingMoreDraw.value) return;
           try {
+            // enforce 3s interval between two queries
+            const now = Date.now();
+            if (lastDrawQueryAt.value && (now - lastDrawQueryAt.value) < DRAW_QUERY_GAP_MS) { return; }
             loadingMoreDraw.value = true;
-            // Use cached incremental sync
-            const events = await syncEventsCached('NFTDrawn', {}, BLOG_DEPLOY_BLOCK);
-            const all = (events || []).map(ev => {
-              const d = ev.returnValues || {};
-              return { user: d.user, tokenId: Number(d.tokenId), prizeName: d.prizeName, uri: d.uri, timestamp: Number(d.timestamp), blockNumber: ev.blockNumber, tx: ev.transactionHash };
-            }).sort((a,b) => b.blockNumber - a.blockNumber);
-            const start = drawRecords.value.length;
-            const size = Number(drawPageSize.value || 20);
-            const page = all.slice(start, start + size);
-            const imgs = await Promise.all(page.map(r => resolvePrizeImage(r.uri)));
-            for (let i = 0; i < page.length; i++) {
-              page[i]._imageUrl = imgs[i] || '';
-              page[i]._imgErr = false;
-              page[i]._retried = false;
+
+            let cursor = Number(drawScanCursor.value || 0);
+            let endBlock = Number(drawScanEnd.value || 0);
+            if (cursor <= endBlock) {
+              if (cursor === 0) {
+                try {
+                  const latest = await web3.eth.getBlockNumber();
+                  drawScanCursor.value = Number(latest);
+                  drawScanEnd.value = Number(BLOG_DEPLOY_BLOCK > 0 ? BLOG_DEPLOY_BLOCK : 0);
+                  cursor = Number(drawScanCursor.value || 0);
+                  endBlock = Number(drawScanEnd.value || 0);
+                  hasMoreDraw.value = cursor > endBlock;
+                } catch (e) {
+                  hasMoreDraw.value = true; // keep button visible for manual retry
+                }
+                if (cursor <= endBlock) {
+                  hasMoreDraw.value = false;
+                  return;
+                }
+              } else {
+                hasMoreDraw.value = false;
+                return;
+              }
             }
-            drawRecords.value = drawRecords.value.concat(page);
-            hasMoreDraw.value = all.length > drawRecords.value.length;
+            const fromBlock = Math.max(endBlock, cursor - DRAW_SCAN_STEP + 1);
+            const toBlock = cursor;
+
+            const evs = await contract.getPastEvents('NFTDrawn', { fromBlock, toBlock });
+            const mapped = (evs || []).map(ev => {
+              const d = ev.returnValues || {};
+              return {
+                user: d.user,
+                tokenId: Number(d.tokenId),
+                prizeName: d.prizeName,
+                uri: d.uri,
+                timestamp: Number(d.timestamp),
+                blockNumber: ev.blockNumber,
+                tx: ev.transactionHash
+              };
+            }).sort((a,b) => b.blockNumber - a.blockNumber);
+
+            const imgs = await Promise.all(mapped.map(r => resolvePrizeImage(r.uri)));
+            for (let i = 0; i < mapped.length; i++) {
+              mapped[i]._imageUrl = imgs[i] || '';
+              mapped[i]._imgErr = false;
+              mapped[i]._retried = false;
+            }
+            // append results
+            drawRecords.value = drawRecords.value.concat(mapped);
+
+            // move cursor only on success
+            drawScanCursor.value = fromBlock - 1;
+            hasMoreDraw.value = drawScanCursor.value > endBlock;
+
+            // record timestamp
+            lastDrawQueryAt.value = Date.now();
           } catch (e) {
+            // keep cursor unchanged; user can click again to retry
             console.error('loadMoreDrawRecords error', e);
-          } finally { loadingMoreDraw.value = false; }
+          } finally {
+            loadingMoreDraw.value = false;
+            drawCooldownActive.value = true;
+            setTimeout(() => { drawCooldownActive.value = false; }, DRAW_QUERY_GAP_MS);
+          }
         }
 
-        async function loadNFTs() {
-          // Paged, cached NFT loader
-          const addr = account.value;
-          if (!addr || !contract) { nfts.value = []; _nftTokenIds.value = []; return; }
+        // 我的NFT：沿用评论/中奖记录的分段事件扫描逻辑
+        // 1) 首次访问，从最新区块开始；2) 每次扫描10万块；3) 失败不推进游标，可重试；4) 两次查询间隔3秒；5) 直到部署区块
+        async function initNfts() {
           try {
             ensureReadOnly();
-            // 1) Read cache
-            let cache = readNftCache(addr);
+            nfts.value = [];
+            _nftTokenIds.value = [];
+            const latest = await web3.eth.getBlockNumber();
+            nftScanCursor.value = Number(latest);
+            nftScanEnd.value = Number(BLOG_DEPLOY_BLOCK > 0 ? BLOG_DEPLOY_BLOCK : 0);
+            nftHasMore.value = nftScanCursor.value > nftScanEnd.value;
+            lastNftQueryAt.value = 0;
+          } catch (e) { console.error('initNfts error', e); nftHasMore.value = true; }
+        }
 
-            // 2) Offline mode: DO NOT call getOwnedTokens; rely solely on cached/externally provided tokenIds
-            let tokenIds = (cache.tokenIds || []).map(Number);
+        async function loadMoreNfts() {
+          ensureReadOnly();
+          if (!contract || !web3 || !account.value) return;
+          if (nftLoadingMore.value) return;
+          try {
+            const now = Date.now();
+            if (lastNftQueryAt.value && (now - lastNftQueryAt.value) < DRAW_QUERY_GAP_MS) { return; }
+            nftLoadingMore.value = true;
 
-            // 3) Sort desc and update paging index
-            tokenIds = (tokenIds || []).map(Number).sort((a, b) => b - a);
-            _nftTokenIds.value = tokenIds;
-
-            // 4) Compute current page slice
-            const pageSize = Number(nftPageSize.value || NFT_PAGE_SIZE);
-            const total = tokenIds.length;
-            const pages = Math.max(1, Math.ceil(total / Math.max(1, pageSize)));
-            if (nftPage.value > pages) nftPage.value = pages;
-            const p = Math.max(1, Math.min(nftPage.value, pages));
-            const end = p * pageSize;
-            const start = Math.max(0, end - pageSize);
-            const slice = tokenIds.slice(start, end);
-
-            // 5) Build page list using cache first, then fill gaps
-            const list = [];
-            for (const tid of slice) {
-              let entry = cache.meta && cache.meta[tid];
-              if (!entry && !isRpcPaused()) {
+            let cursor = Number(nftScanCursor.value || 0);
+            let endBlock = Number(nftScanEnd.value || 0);
+            if (cursor <= endBlock) {
+              if (cursor === 0) {
                 try {
-                  await sleep(120);
-                  const rawURI = await callView(() => contract.methods.tokenURI(tid).call());
-                  const uriResolved = resolveUrl(rawURI);
-                  let metadata = parseTokenMetadata(rawURI);
-                  if (!metadata && uriResolved && uriResolved.startsWith('http')) {
-                    try {
-                      const resp = await fetch(uriResolved, { mode: 'cors' });
-                      if (resp.ok) metadata = await resp.json();
-                    } catch (err) { console.warn('fetch metadata failed', uriResolved, err); }
-                  }
-                  let imageUrl = '';
-                  if (metadata && metadata.image) imageUrl = resolveUrl(metadata.image);
-                  entry = { tokenURI: rawURI, uriResolved, metadata, imageUrl };
-                  cache.meta = cache.meta || {};
-                  cache.meta[tid] = entry;
-                  writeNftCache(addr, cache);
-                } catch (e) { console.warn('tokenURI failed for', tid, e); }
+                  const latest = await web3.eth.getBlockNumber();
+                  nftScanCursor.value = Number(latest);
+                  nftScanEnd.value = Number(BLOG_DEPLOY_BLOCK > 0 ? BLOG_DEPLOY_BLOCK : 0);
+                  cursor = Number(nftScanCursor.value || 0);
+                  endBlock = Number(nftScanEnd.value || 0);
+                  nftHasMore.value = cursor > endBlock;
+                } catch (e) {
+                  nftHasMore.value = true; // keep button visible for manual retry
+                }
+                if (cursor <= endBlock) {
+                  nftHasMore.value = false;
+                  return;
+                }
+              } else {
+                nftHasMore.value = false;
+                return;
               }
-              const e2 = entry || { tokenURI: '', uriResolved: '', metadata: null, imageUrl: '' };
-              list.push({ tokenId: Number(tid), tokenURI: e2.tokenURI, uriResolved: e2.uriResolved, metadata: e2.metadata, imageUrl: e2.imageUrl });
+            }
+            const fromBlock = Math.max(endBlock, cursor - DRAW_SCAN_STEP + 1);
+            const toBlock = cursor;
+
+            // 扫描事件并记录tokenId与事件中的uri作为备用
+            const evs = await contract.getPastEvents('NFTDrawn', { filter: { user: account.value }, fromBlock, toBlock });
+            const found = new Set(_nftTokenIds.value || []);
+            const newIdsSet = new Set();
+            const uriByTid = new Map();
+            for (const ev of (evs || [])) {
+              const d = ev.returnValues || {};
+              if (String(d.user || '').toLowerCase() === String(account.value).toLowerCase()) {
+                const tid = Number(d.tokenId);
+                if (Number.isFinite(tid)) {
+                  if (!found.has(tid)) { newIdsSet.add(tid); found.add(tid); }
+                  if (d.uri && !uriByTid.has(tid)) uriByTid.set(tid, d.uri);
+                }
+              }
             }
 
-            nfts.value = list;
-          } catch (e) { console.error('loadNFTs error', e); }
+            const newIds = Array.from(newIdsSet).sort((a,b) => b - a);
+            const items = [];
+            for (const tid of newIds) {
+              let fromChain = '';
+              let fromEvent = uriByTid.get(tid) || '';
+              try { fromChain = await callView(() => contract.methods.tokenURI(tid).call()); } catch (_) {}
+              const chosen = fromChain || fromEvent || '';
+              let finalURI = chosen;
+              let uriResolved = finalURI ? resolveUrl(finalURI) : '';
+              let metadata = null;
+              let imageUrl = '';
+
+              try {
+                if (finalURI && finalURI.startsWith('data:application/json;base64,')) {
+                  metadata = parseTokenMetadata(finalURI);
+                } else if (uriResolved) {
+                  // 尝试以JSON获取（带超时，容错更强）
+                  const md = await fetchJsonSafe(uriResolved);
+                  if (md && typeof md === 'object') metadata = md;
+                }
+                if (metadata && metadata.image) {
+                  imageUrl = resolveUrl(metadata.image);
+                }
+                if (!imageUrl && finalURI) {
+                  // 尝试将URI作为图片或JSON解析为图片
+                  imageUrl = await resolvePrizeImage(finalURI);
+                }
+              } catch (e) {
+                console.warn('metadata resolve failed for', tid, e);
+              }
+
+              items.push({ tokenId: Number(tid), tokenURI: finalURI, uriResolved, metadata, imageUrl });
+            }
+
+            _nftTokenIds.value = Array.from(found).sort((a,b) => b - a);
+            nfts.value = (nfts.value || []).concat(items);
+
+            // 成功后推进游标
+            nftScanCursor.value = fromBlock - 1;
+            nftHasMore.value = nftScanCursor.value > endBlock;
+            lastNftQueryAt.value = Date.now();
+          } catch (e) {
+            console.error('loadMoreNfts error', e);
+          } finally {
+            nftLoadingMore.value = false;
+            nftCooldownActive.value = true;
+            setTimeout(() => { nftCooldownActive.value = false; }, DRAW_QUERY_GAP_MS);
+          }
         }
+
+        // 旧的我的NFT分页加载已移除，采用分段事件扫描（initNfts/loadMoreNfts）
+        async function loadNFTs() { return; }
 
         async function loadPrizeImages() {
           try {
@@ -2322,74 +2332,6 @@
           }
         }
 
-        // NFT cache helpers (per chain + contract + account)
-        function nftCacheKey(addr) {
-          const chain = String(networkId.value || TARGET_CHAIN_ID);
-          const c = contract && contract.options && contract.options.address ? contract.options.address : BLOG_ADDRESS;
-          return `nft_cache_${chain}_${c}_${(addr||'').toLowerCase()}`;
-        }
-        function readNftCache(addr) {
-          try {
-            const raw = localStorage.getItem(nftCacheKey(addr));
-            if (!raw) return { tokenIds: [], meta: {}, ts: 0 };
-            const obj = JSON.parse(raw);
-            return { tokenIds: obj.tokenIds || [], meta: obj.meta || {}, ts: obj.ts || 0 };
-          } catch { return { tokenIds: [], meta: {}, ts: 0 }; }
-        }
-        function writeNftCache(addr, data) {
-          try {
-            localStorage.setItem(nftCacheKey(addr), JSON.stringify({ tokenIds: data.tokenIds || [], meta: data.meta || {}, ts: Date.now() }));
-          } catch (_) {}
-        }
-        function clearNftCache(addr) {
-          try { localStorage.removeItem(nftCacheKey(addr)); } catch (_) {}
-        }
-        function shallowEqualArray(a, b) {
-          if (!Array.isArray(a) || !Array.isArray(b)) return false;
-          if (a.length !== b.length) return false;
-          for (let i = 0; i < a.length; i++) if (String(a[i]) !== String(b[i])) return false;
-          return true;
-        }
-        // Offline injection helpers
-        function setOfflineOwnedTokenIds(ids) {
-          const addr = account.value;
-          if (!addr) return;
-          if (!Array.isArray(ids)) return;
-          const norm = ids.map(x => Number(x)).filter(x => Number.isFinite(x));
-          const cache = readNftCache(addr);
-          cache.tokenIds = Array.from(new Set(norm));
-          // Drop meta that no longer exist
-          const keep = {};
-          for (const tid of cache.tokenIds) if (cache.meta && cache.meta[tid]) keep[tid] = cache.meta[tid];
-          cache.meta = keep;
-          writeNftCache(addr, cache);
-          // reset to first page and reload
-          nftPage.value = 1;
-          _nftTokenIds.value = cache.tokenIds.slice().sort((a,b)=>b-a);
-          loadNFTs();
-        }
-        function setOfflineNftMeta(metaMap) {
-          const addr = account.value;
-          if (!addr) return;
-          if (!metaMap || typeof metaMap !== 'object') return;
-          const cache = readNftCache(addr);
-          cache.meta = cache.meta || {};
-          for (const k of Object.keys(metaMap)) {
-            const tid = Number(k);
-            if (!Number.isFinite(tid)) continue;
-            const m = metaMap[k] || {};
-            cache.meta[tid] = {
-              tokenURI: m.tokenURI || cache.meta[tid]?.tokenURI || '',
-              uriResolved: m.uriResolved || cache.meta[tid]?.uriResolved || '',
-              metadata: m.metadata || cache.meta[tid]?.metadata || null,
-              imageUrl: m.imageUrl || cache.meta[tid]?.imageUrl || ''
-            };
-          }
-          writeNftCache(addr, cache);
-          loadNFTs();
-        }
-
-        // Strip CDN style suffix like `!dp6` that may break hotlinking/proxying
         function stripImageStyle(u) {
           if (!u || typeof u !== 'string') return u;
           // keep query/hash, only strip the first '!' between path and query/hash
@@ -2740,9 +2682,7 @@
           window.open(`${CHAIN_explorer}/address/${addr}`, "_blank");
         }
 
-        function prevNftPage() { if (nftPage.value > 1) { nftPage.value--; loadNFTs(); } }
-        function nextNftPage() { if (nftPage.value < nftTotalPages.value) { nftPage.value++; loadNFTs(); } }
-
+                
         return { account, connecting, connect, refreshMine, networkDesc, short, blogAddress,
                  // Wallet management
                  walletMode, showWalletModal, showWalletSettings, localWallet,
@@ -2750,7 +2690,7 @@
                  openWalletModal, closeWalletModal, openWalletSettings, closeWalletSettings,
                  useLocalWallet, connectMetaMask, switchWalletMode, disconnect,
                  clearLocalWallet, importWallet, togglePrivateKey, copyPrivateKey,
-                 newPost, createPost, totalPosts, posts, comment, toggleComments, formatTime,
+                 newPost, createPost, totalPosts, posts, comment, toggleComments, loadMoreComments, formatTime,
                  // create modal
                  showCreateModal, openCreate, closeCreate, posting,
                  profile, points, draw, drawCost, loadingDraw, prizes, nfts, loadAll,
@@ -2761,11 +2701,9 @@
                  // profile view/edit
                  editingProfile, editProfile, startEditProfile, cancelEditProfile,
                  viewAvatarErr, editAvatarErr, saveProfile, savingProfile,
-                 // nft paging
-                 nftPage, nftTotalPages, hasPrevNft, hasNextNft, prevNftPage, nextNftPage,
-                 // nft offline helpers
-                 setOfflineOwnedTokenIds, setOfflineNftMeta, clearNftCache,
-                 // utils
+                 // nft scanner (no pagination)
+                 nftHasMore, nftLoadingMore, nftCooldownActive, loadMoreNfts, initNfts,
+                                  // utils
                  copy, displayImageUrl, resolveUrl, explorerTx,goToExplorer,
                  // content modal
                  showContentModal, contentModal, openContent, closeContent, previewText, isLongContent,
