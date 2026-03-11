@@ -1,0 +1,15 @@
+
+=======mega-testnet
+逻辑合约地址: 0x0Da1aa0Ae716eea6A702d76681A9aD3d4e3B3929
+代理合约地址: 0xe2bCF79E7EDF3f1BA90b7160e8775De942E362d5
+✅ NFT Contract deployed at: 0x6698576bDe57A006A348dF4058C378994cF216aa
+✅ NFT ownership transferred and bound to BlogPlatform
+✅ TT deployed at: 0x9e4bE8997D4C4C10Eb797e9bA55fA83eac1eD597
+✅ Funded BlogPlatform with TT: 500000000000000000000000
+✅ Prize pool initialized
+
+=== Summary ===
+BlogPlatform logic: 0x0Da1aa0Ae716eea6A702d76681A9aD3d4e3B3929
+BlogPlatform proxy: 0xe2bCF79E7EDF3f1BA90b7160e8775De942E362d5
+NFT: 0x6698576bDe57A006A348dF4058C378994cF216aa
+TT: 0x9e4bE8997D4C4C10Eb797e9bA55fA83eac1eD597
