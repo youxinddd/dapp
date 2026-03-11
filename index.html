@@ -478,7 +478,7 @@
             <div style="display: flex; align-items: center; gap: 10px;">
               <div style="display: flex; align-items: center; gap: 5px;">
                 <label>资产</label> 
-                <a href="https://testnet.megaeth.com/#2" target="_blank" rel="noopener noreferrer">
+                <a href="https://docs.megaeth.com/faucet" target="_blank" rel="noopener noreferrer">
                   (领取空投)
                 </a>
               </div>
@@ -798,7 +798,7 @@
   <script src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
       
   <script>
-    const BLOG_ADDRESS = '0x8039fec0287b01a685c851fb0Bac0Ac81694a483';
+    const BLOG_ADDRESS = '0xe2bCF79E7EDF3f1BA90b7160e8775De942E362d5';
     const BLOG_ABI = [
     {
       "anonymous": false,
@@ -946,8 +946,8 @@
     // Target chain configuration (ensure wallet is on correct network)
     const CHAIN_RPC = 'https://carrot.megaeth.com/rpc';
     const CHAIN_explorer = 'https://web3.okx.com/zh-hans/explorer/megaeth-testnet';
-    const TARGET_CHAIN_ID = 6342;
-    const TARGET_CHAIN_HEX = '0x18C6'; // 6342 in hex
+    const TARGET_CHAIN_ID = 6343;
+    const TARGET_CHAIN_HEX = '0x18C7'; // 6343 in hex
     const TARGET_CHAIN_PARAMS = {
       chainId: TARGET_CHAIN_HEX,
       chainName: 'MegaETH',
@@ -961,7 +961,7 @@
 
     // Configurable constants
     const POST_PAGE_SIZE = 10;        
-    const BLOG_DEPLOY_BLOCK = 12852339; 
+    const BLOG_DEPLOY_BLOCK = 13486255; 
     // NFT paging defaults
     const NFT_PAGE_SIZE = 24; // default items per page
     const DRAW_SCAN_STEP = 10000; // 每次查询的区块数量
@@ -1613,11 +1613,11 @@
         };
         const networkDesc = Vue.computed(() => networkId.value ? `ChainId: ${networkId.value}` : '未连接');
         function explorerTx(tx) {
-          const base = (Number(networkId.value) === 6342) ? CHAIN_explorer : '';
+          const base = (Number(networkId.value) === TARGET_CHAIN_ID) ? CHAIN_explorer : '';
           return base ? base + '/tx/' + tx : '';
         }
         function explorerAddr(addr) {
-          const base = (Number(networkId.value) === 6342) ? CHAIN_explorer : '';
+          const base = (Number(networkId.value) === TARGET_CHAIN_ID) ? CHAIN_explorer : '';
           return base && addr ? base + '/address/' + addr : '';
         }
 
