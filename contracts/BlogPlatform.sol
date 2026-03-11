@@ -1,14 +1,18 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "OpenZeppelin/openzeppelin-contracts-upgradeable@4.9.3/contracts/token/ERC721/extensions/ERC721URIStorageUpgradeable.sol";
 import "OpenZeppelin/openzeppelin-contracts-upgradeable@4.9.3/contracts/proxy/utils/UUPSUpgradeable.sol";
 import "OpenZeppelin/openzeppelin-contracts-upgradeable@4.9.3/contracts/access/OwnableUpgradeable.sol";
 import "OpenZeppelin/openzeppelin-contracts-upgradeable@4.9.3/contracts/proxy/utils/Initializable.sol";
 import "OpenZeppelin/openzeppelin-contracts-upgradeable@4.9.3/contracts/token/ERC20/IERC20Upgradeable.sol";
 import "OpenZeppelin/openzeppelin-contracts-upgradeable@4.9.3/contracts/token/ERC20/utils/SafeERC20Upgradeable.sol";
 
-contract BlogPlatform is Initializable, ERC721URIStorageUpgradeable, UUPSUpgradeable, OwnableUpgradeable {
+interface IMegaNFTCollection {
+    function mintBatch(address to, string[] calldata uris) external;
+    function nextTokenId() external view returns (uint256);
+}
+
+contract BlogPlatform is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     using SafeERC20Upgradeable for IERC20Upgradeable;
 
     struct Post {
@@ -36,8 +40,10 @@ contract BlogPlatform is Initializable, ERC721URIStorageUpgradeable, UUPSUpgrade
     }
 
     uint256 public postCount;
-    uint256 public tokenIdCounter;
     uint256 public drawCost;
+    uint256 public drawNonce;
+
+    address public nftContract;
 
     mapping(uint256 => Post) public posts;
     mapping(address => Profile) public profiles;
@@ -83,23 +89,25 @@ contract BlogPlatform is Initializable, ERC721URIStorageUpgradeable, UUPSUpgrade
     }
 
     function initialize() public initializer {
-        __ERC721_init("DMHBlogNFT", "DMH");
-        __ERC721URIStorage_init();
         __Ownable_init();
         __UUPSUpgradeable_init();
 
         drawCost = 50;
-        tokenIdCounter = 1;
+        drawNonce = 1;
 
         // default TT config
         ttDecimals = 18;
         ttAmountPerRedeem = 50 * (10 ** uint256(18));
     }
 
+    function setNFTContract(address nft) external onlyOwner {
+        require(nft != address(0), "invalid nft");
+        nftContract = nft;
+    }
+
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
 
     // 用户功能 👇
-
     function createPost(string memory title, string memory content, string memory url) external {
         uint256 pid = postCount;
         posts[pid] = Post(pid, title, content, url, msg.sender, 0, 0, block.timestamp);
@@ -164,7 +172,9 @@ contract BlogPlatform is Initializable, ERC721URIStorageUpgradeable, UUPSUpgrade
 
         require(totalWeight > 0, "No prizes available");
 
-        uint256 rand = uint256(keccak256(abi.encodePacked(block.timestamp, msg.sender, tokenIdCounter))) % totalWeight;
+        require(nftContract != address(0), "NFT contract not set");
+
+        uint256 rand = uint256(keccak256(abi.encodePacked(block.timestamp, msg.sender, drawNonce))) % totalWeight;
         uint256 cumulative = 0;
         uint256 selected = 0;
 
@@ -176,11 +186,13 @@ contract BlogPlatform is Initializable, ERC721URIStorageUpgradeable, UUPSUpgrade
             }
         }
 
-        _safeMint(msg.sender, tokenIdCounter);
-        _setTokenURI(tokenIdCounter, prizes[selected].uri);
+        uint256 tokenId = IMegaNFTCollection(nftContract).nextTokenId();
+        string[] memory uris = new string[](1);
+        uris[0] = prizes[selected].uri;
+        IMegaNFTCollection(nftContract).mintBatch(msg.sender, uris);
 
-        emit NFTDrawn(msg.sender, tokenIdCounter, prizes[selected].name, prizes[selected].uri, block.timestamp);
-        tokenIdCounter++;
+        emit NFTDrawn(msg.sender, tokenId, prizes[selected].name, prizes[selected].uri, block.timestamp);
+        unchecked { ++drawNonce; }
     }
     
    // 积分兑换 TT
@@ -408,20 +420,5 @@ contract BlogPlatform is Initializable, ERC721URIStorageUpgradeable, UUPSUpgrade
             unchecked { ++i; }
         }
     }
-    // 获取我的NFT
-    function getOwnedTokens(address owner) external view returns (uint256[] memory) {
-        uint256 balance = balanceOf(owner);
-        uint256[] memory tokenIds = new uint256[](balance);
-        uint256 index = 0;
 
-        for (uint256 tokenId = 1; tokenId < tokenIdCounter; tokenId++) {
-            if (_exists(tokenId) && ownerOf(tokenId) == owner) {
-                tokenIds[index] = tokenId;
-                index++;
-                if (index == balance) break;
-            }
-        }
-        
-        return tokenIds;
-    }
 }
